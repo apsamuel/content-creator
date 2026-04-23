@@ -1,0 +1,11 @@
+VIDEO PROMPT - PRIMARY
+Whimsical, cartoonish, and fun cinematic scene in a magical plush forest filled with oversized mushrooms, glowing flowers, velvet moss, and winding storybook paths. Main character is a charming human-animal hybrid child explorer with soft rabbit ears and a small fluffy tail, expressive face, playful body language, and adventurous energy. Gentle floating particles, drifting pollen, and warm light rays through pastel tree canopies. Kyoto-animation-inspired hand-painted look, detailed backgrounds, soft watercolor textures, clean linework, high color harmony, emotionally warm atmosphere. Fluid animation feel with natural motion arcs, smooth character movement, and subtle cloth and ear motion. Dynamic camera movement: slow push-in, slight parallax, cinematic depth, 24fps feeling, highly polished visual storytelling.
+
+VIDEO PROMPT - ACTION VARIANT
+Cartoon fantasy chase sequence in an enchanted plush forest. The rabbit-eared hybrid hero runs, hops, and spins between giant glowing plants, curved roots, and floating lantern seeds. The world feels playful and magical with exaggerated but elegant movement. Kyoto-animation-inspired art direction, painterly backgrounds, rich texture, colorful but balanced palette, soft bloom highlights. Focus on fluid movement and continuity: smooth transitions, squash-and-stretch moments, believable momentum, expressive gestures. Camera tracks laterally with occasional overhead glide for scale and wonder.
+
+VIDEO PROMPT - QUIET VARIANT
+Peaceful and magical character moment in a plush fantasy forest at golden hour. Human-rabbit hybrid protagonist sits on a mossy log beside bioluminescent flowers, tail gently swaying, ears reacting to wind and distant sounds. Firefly-like lights drift around the scene. Kyoto-animation-inspired hand-crafted aesthetic with delicate brush textures, soft gradients, storybook framing, and serene mood. Emphasize fluid ambient motion: leaves swaying, grass rippling, subtle breathing animation, slow cinematic camera drift.
+
+NEGATIVE PROMPT
+photorealistic, live action, gritty realism, horror, dark gore, low resolution, blurry, noisy, pixelated, warped anatomy, deformed hands, extra limbs, broken face, harsh contrast, oversaturated neon, flat lighting, text overlay, watermark, logo, UI elements, jittery motion, choppy animation

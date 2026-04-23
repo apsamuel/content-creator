@@ -1,0 +1,14 @@
+HF_TOKEN=your_hugging_face_token
+
+# Default model selections (can be overridden per command by CLI flags).
+# CLI precedence: --llm-model/-L, --stt-model/-S, --tts-model/-T, --image-model/-I
+HF_LLM_MODEL=meta-llama/Llama-3.1-8B-Instruct
+HF_STT_MODEL=openai/whisper-large-v3
+# Used only when --preserve-speaker is enabled.
+# pyannote models are gated; accept model terms on Hugging Face first.
+HF_DIARIZATION_MODEL=pyannote/speaker-diarization-3.1
+HF_TTS_MODEL=hexgrad/Kokoro-82M
+HF_IMAGE_MODEL=stabilityai/stable-diffusion-xl-base-1.0
+
+# Working directory for generated intermediates and manifests.
+VIDEO_GENERATOR_WORK_DIR=./output
