@@ -481,6 +481,74 @@ def test_transcribe_passes_preserve_speaker(monkeypatch, tmp_path: Path) -> None
     assert fake_pipeline.calls[0][2]["preserve_speaker"] is True
 
 
+def test_transcribe_passes_content_safety_options(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "transcribe",
+            "--audio-file",
+            str(audio_file),
+            "--content-safety",
+            "--content-safety-filter",
+            "--content-safety-threshold",
+            "0.85",
+            "--content-safety-model",
+            "unitary/toxic-bert",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["content_safety_enabled"] is True
+    assert fake_pipeline.calls[0][2]["content_safety_filter"] is True
+    assert fake_pipeline.calls[0][2]["content_safety_threshold"] == 0.85
+    assert fake_pipeline.calls[0][2]["content_safety_model"] == "unitary/toxic-bert"
+
+
+def test_from_audio_passes_content_safety_options(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-audio",
+            "--audio-file",
+            str(audio_file),
+            "--video-prompt",
+            "Style",
+            "--content-safety",
+            "--content-safety-threshold",
+            "0.65",
+            "--content-safety-model",
+            "unitary/unbiased-toxic-roberta",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["content_safety_enabled"] is True
+    assert fake_pipeline.calls[0][2]["content_safety_filter"] is False
+    assert fake_pipeline.calls[0][2]["content_safety_threshold"] == 0.65
+    assert (
+        fake_pipeline.calls[0][2]["content_safety_model"]
+        == "unitary/unbiased-toxic-roberta"
+    )
+
+
 def test_from_audio_requires_video_prompt_without_generation(
     monkeypatch, tmp_path: Path
 ) -> None:

@@ -51,6 +51,73 @@ class HuggingFaceGateway:
             return str(result.get("text", "")).strip()
         return str(result).strip()
 
+    def classify_content_safety(
+        self, text: str, *, model: str | None = None
+    ) -> dict[str, Any]:
+        model_id = (model or "unitary/unbiased-toxic-roberta").strip()
+        result = self._client.text_classification(text, model=model_id)
+
+        normalized: list[dict[str, Any]] = []
+        if isinstance(result, list):
+            for item in result:
+                if isinstance(item, dict):
+                    label = str(item.get("label", "")).strip()
+                    score = float(item.get("score", 0.0) or 0.0)
+                else:
+                    label = str(getattr(item, "label", "")).strip()
+                    score = float(getattr(item, "score", 0.0) or 0.0)
+                if label:
+                    normalized.append({"label": label, "score": score})
+        elif isinstance(result, dict):
+            label = str(result.get("label", "")).strip()
+            score = float(result.get("score", 0.0) or 0.0)
+            if label:
+                normalized.append({"label": label, "score": score})
+        else:
+            label = str(getattr(result, "label", "")).strip()
+            score = float(getattr(result, "score", 0.0) or 0.0)
+            if label:
+                normalized.append({"label": label, "score": score})
+
+        normalized.sort(key=lambda entry: float(entry.get("score", 0.0)), reverse=True)
+        top = normalized[0] if normalized else {"label": "", "score": 0.0}
+
+        unsafe_tokens = (
+            "toxic",
+            "hate",
+            "offensive",
+            "obscene",
+            "sexual",
+            "nsfw",
+            "profan",
+            "insult",
+            "threat",
+            "violence",
+            "self-harm",
+            "harmful",
+        )
+
+        unsafe_score = 0.0
+        for entry in normalized:
+            label = str(entry.get("label", "")).lower()
+            score = float(entry.get("score", 0.0) or 0.0)
+            if any(token in label for token in unsafe_tokens):
+                unsafe_score = max(unsafe_score, score)
+
+        if unsafe_score == 0.0:
+            top_label = str(top.get("label", "")).lower()
+            top_score = float(top.get("score", 0.0) or 0.0)
+            if any(token in top_label for token in unsafe_tokens):
+                unsafe_score = top_score
+
+        return {
+            "model": model_id,
+            "unsafe_score": unsafe_score,
+            "top_label": str(top.get("label", "")),
+            "top_score": float(top.get("score", 0.0) or 0.0),
+            "labels": normalized,
+        }
+
     def transcribe_audio_with_speakers(self, audio_path: Path) -> str:
         if shutil.which("ffmpeg") is None:
             raise RuntimeError(

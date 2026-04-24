@@ -248,6 +248,30 @@ def from_text(
     show_default=True,
     help="Use speaker diarization so transcript text is labeled by speaker.",
 )
+@click.option(
+    "--content-safety/--no-content-safety",
+    default=False,
+    show_default=True,
+    help="Label transcript content safety for full audio/chunks using a Hugging Face classifier.",
+)
+@click.option(
+    "--content-safety-filter/--no-content-safety-filter",
+    default=False,
+    show_default=True,
+    help="Drop transcript segments flagged unsafe when content safety is enabled.",
+)
+@click.option(
+    "--content-safety-threshold",
+    default=0.7,
+    show_default=True,
+    type=click.FloatRange(0.0, 1.0),
+    help="Unsafe score threshold used to flag/filter transcript segments.",
+)
+@click.option(
+    "--content-safety-model",
+    default=None,
+    help="Override Hugging Face moderation model (default: unitary/unbiased-toxic-roberta).",
+)
 @click.option("--work-dir", default=None, help="Directory for intermediate assets.")
 @click.pass_context
 def from_audio(
@@ -258,6 +282,10 @@ def from_audio(
     output_path: Path,
     chunk_seconds: float,
     preserve_speaker: bool,
+    content_safety: bool,
+    content_safety_filter: bool,
+    content_safety_threshold: float,
+    content_safety_model: str | None,
     work_dir: str | None,
 ) -> None:
     """Transcribe supplied audio and generate a matching AI video track."""
@@ -284,6 +312,10 @@ def from_audio(
             output_path=output_path,
             chunk_seconds=chunk_seconds,
             preserve_speaker=preserve_speaker,
+            content_safety_enabled=content_safety,
+            content_safety_filter=content_safety_filter,
+            content_safety_threshold=content_safety_threshold,
+            content_safety_model=content_safety_model,
         )
         click.echo(f"✅ Video written to {result}")
 
@@ -316,6 +348,30 @@ def from_audio(
     show_default=True,
     help="Use speaker diarization so transcript text is labeled by speaker.",
 )
+@click.option(
+    "--content-safety/--no-content-safety",
+    default=False,
+    show_default=True,
+    help="Label transcript content safety for full audio/chunks using a Hugging Face classifier.",
+)
+@click.option(
+    "--content-safety-filter/--no-content-safety-filter",
+    default=False,
+    show_default=True,
+    help="Drop transcript segments flagged unsafe when content safety is enabled.",
+)
+@click.option(
+    "--content-safety-threshold",
+    default=0.7,
+    show_default=True,
+    type=click.FloatRange(0.0, 1.0),
+    help="Unsafe score threshold used to flag/filter transcript segments.",
+)
+@click.option(
+    "--content-safety-model",
+    default=None,
+    help="Override Hugging Face moderation model (default: unitary/unbiased-toxic-roberta).",
+)
 @click.option("--work-dir", default=None, help="Directory for intermediate assets.")
 @click.pass_context
 def transcribe(
@@ -324,6 +380,10 @@ def transcribe(
     output_path: Path | None,
     chunk_seconds: float,
     preserve_speaker: bool,
+    content_safety: bool,
+    content_safety_filter: bool,
+    content_safety_threshold: float,
+    content_safety_model: str | None,
     work_dir: str | None,
 ) -> None:
     """Generate a transcript for an audio file using the configured AI STT model."""
@@ -343,6 +403,10 @@ def transcribe(
             output_path=output_path,
             chunk_seconds=chunk_seconds,
             preserve_speaker=preserve_speaker,
+            content_safety_enabled=content_safety,
+            content_safety_filter=content_safety_filter,
+            content_safety_threshold=content_safety_threshold,
+            content_safety_model=content_safety_model,
         )
         if output_path is not None:
             click.echo(f"✅ Transcript written to {output_path}")

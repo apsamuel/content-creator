@@ -25,6 +25,31 @@ class FakeGateway:
     def transcribe_audio_with_speakers(self, audio_path: Path) -> str:
         return f"SPEAKER_00: transcribed {audio_path.stem}"
 
+    def classify_content_safety(
+        self, text: str, *, model: str | None = None
+    ) -> dict[str, object]:
+        if "chunk_0001" in text:
+            return {
+                "model": model or "unitary/unbiased-toxic-roberta",
+                "unsafe_score": 0.95,
+                "top_label": "toxic",
+                "top_score": 0.95,
+                "labels": [
+                    {"label": "toxic", "score": 0.95},
+                    {"label": "non-toxic", "score": 0.05},
+                ],
+            }
+        return {
+            "model": model or "unitary/unbiased-toxic-roberta",
+            "unsafe_score": 0.05,
+            "top_label": "non-toxic",
+            "top_score": 0.95,
+            "labels": [
+                {"label": "non-toxic", "score": 0.95},
+                {"label": "toxic", "score": 0.05},
+            ],
+        }
+
     def generate_image(self, prompt: str, destination: Path) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(b"image")
@@ -281,6 +306,36 @@ def test_transcribe_audio_file_preserves_speaker_labels_full_file(
 
     assert text == "SPEAKER_00: transcribed dialog"
     assert "🧩 Transcribing audio with speaker diarization (full file)" in statuses
+
+
+def test_transcribe_audio_file_filters_flagged_chunks_when_enabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    statuses: list[str] = []
+    pipeline = VideoGenerationPipeline(
+        _config(tmp_path), status_callback=statuses.append
+    )
+    audio_path = tmp_path / "input.m4a"
+    audio_path.write_bytes(b"audio")
+
+    text = pipeline.transcribe_audio_file(
+        audio_path=audio_path,
+        chunk_seconds=45.0,
+        content_safety_enabled=True,
+        content_safety_filter=True,
+        content_safety_threshold=0.7,
+    )
+
+    assert text == "transcribed chunk_0000"
+    assert any("Filtered chunk" in status for status in statuses)
+    assert any("Content safety summary" in status for status in statuses)
 
 
 def test_missing_video_dependencies_raises(

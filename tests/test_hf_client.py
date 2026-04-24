@@ -42,6 +42,13 @@ class FakeInferenceClient:
         self.calls["text_to_image"] = (prompt, kwargs)
         return Image.new("RGB", (64, 64), color="black")
 
+    def text_classification(self, text: str, **kwargs):
+        self.calls["text_classification"] = (text, kwargs)
+        return [
+            {"label": "toxic", "score": 0.81},
+            {"label": "non-toxic", "score": 0.19},
+        ]
+
 
 def _config(tmp_path: Path) -> AppConfig:
     return AppConfig(
@@ -103,6 +110,24 @@ def test_transcribe_audio_passes_bytes(
     inputs, kwargs = gateway._client.calls["automatic_speech_recognition"]
     assert inputs == b"abc123"
     assert kwargs["model"] == "stt/model"
+
+
+def test_classify_content_safety_uses_requested_model_and_parses_scores(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.hf_client as hf_module
+
+    monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
+    gateway = HuggingFaceGateway(_config(tmp_path))
+
+    result = gateway.classify_content_safety("bad words", model="unitary/toxic-bert")
+
+    assert result["model"] == "unitary/toxic-bert"
+    assert result["unsafe_score"] == pytest.approx(0.81)
+    assert result["top_label"] == "toxic"
+    text, kwargs = gateway._client.calls["text_classification"]
+    assert text == "bad words"
+    assert kwargs["model"] == "unitary/toxic-bert"
 
 
 def test_generate_image_raises_for_non_image(

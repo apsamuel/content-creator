@@ -49,6 +49,7 @@ class VideoGenerationPipeline:
         self._media = MediaAssembler(
             width=config.width, height=config.height, fps=config.fps
         )
+        self._last_content_safety_report: dict[str, object] | None = None
 
     def generate_from_text(
         self,
@@ -102,6 +103,10 @@ class VideoGenerationPipeline:
         chunk_seconds: float = 45.0,
         generate_video_prompt: bool = False,
         preserve_speaker: bool = False,
+        content_safety_enabled: bool = False,
+        content_safety_filter: bool = False,
+        content_safety_threshold: float = 0.7,
+        content_safety_model: str | None = None,
     ) -> Path:
         self._ensure_video_dependencies()
         run_dir = self._prepare_run_dir(output_path)
@@ -114,6 +119,10 @@ class VideoGenerationPipeline:
             "audio": str(audio_path),
             "chunk_seconds": chunk_seconds,
             "preserve_speaker": preserve_speaker,
+            "content_safety_enabled": content_safety_enabled,
+            "content_safety_filter": content_safety_filter,
+            "content_safety_threshold": content_safety_threshold,
+            "content_safety_model": content_safety_model,
             "generate_video_prompt": generate_video_prompt,
             "video_prompt": video_prompt,
         }
@@ -123,8 +132,18 @@ class VideoGenerationPipeline:
             chunk_seconds=chunk_seconds,
             chunk_dir_root=run_dir / "stt_chunks",
             preserve_speaker=preserve_speaker,
+            content_safety_enabled=content_safety_enabled,
+            content_safety_filter=content_safety_filter,
+            content_safety_threshold=content_safety_threshold,
+            content_safety_model=content_safety_model,
         )
+        if not transcript.strip() and content_safety_enabled and content_safety_filter:
+            raise ValueError(
+                "Transcription produced no allowed content after content safety filtering"
+            )
         manifest["narration_text"] = transcript
+        if self._last_content_safety_report is not None:
+            manifest["content_safety"] = self._last_content_safety_report
         manifest["status"] = "transcribed"
         self._write_manifest(run_dir, manifest)
         self._status("⏱️ Measuring audio duration")
@@ -150,13 +169,22 @@ class VideoGenerationPipeline:
         output_path: Path | None = None,
         chunk_seconds: float = 45.0,
         preserve_speaker: bool = False,
+        content_safety_enabled: bool = False,
+        content_safety_filter: bool = False,
+        content_safety_threshold: float = 0.7,
+        content_safety_model: str | None = None,
     ) -> str:
         transcript = self._transcribe_with_optional_chunking(
             audio_path=audio_path,
             chunk_seconds=chunk_seconds,
             chunk_dir_root=self._config.work_dir / "transcribe_chunks",
             preserve_speaker=preserve_speaker,
+            content_safety_enabled=content_safety_enabled,
+            content_safety_filter=content_safety_filter,
+            content_safety_threshold=content_safety_threshold,
+            content_safety_model=content_safety_model,
         )
+        self._emit_content_safety_summary()
         if output_path is not None:
             self._status("💾 Writing transcript to disk")
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -300,15 +328,56 @@ class VideoGenerationPipeline:
         chunk_seconds: float,
         chunk_dir_root: Path,
         preserve_speaker: bool,
+        content_safety_enabled: bool,
+        content_safety_filter: bool,
+        content_safety_threshold: float,
+        content_safety_model: str | None,
     ) -> str:
+        self._last_content_safety_report = None
+        report: dict[str, object] | None = None
+        if content_safety_enabled:
+            report = {
+                "enabled": True,
+                "filter_enabled": content_safety_filter,
+                "threshold": content_safety_threshold,
+                "model": (
+                    content_safety_model or "unitary/unbiased-toxic-roberta"
+                ).strip(),
+                "chunks": [],
+                "dropped_chunks": 0,
+                "kept_chunks": 0,
+            }
+
         if chunk_seconds <= 0:
             if preserve_speaker:
                 self._status(
                     "🧩 Transcribing audio with speaker diarization (full file)"
                 )
-                return self._gateway.transcribe_audio_with_speakers(audio_path)
-            self._status("📝 Transcribing audio with speech-to-text model")
-            return self._gateway.transcribe_audio(audio_path)
+                transcript = self._gateway.transcribe_audio_with_speakers(audio_path)
+            else:
+                self._status("📝 Transcribing audio with speech-to-text model")
+                transcript = self._gateway.transcribe_audio(audio_path)
+
+            if content_safety_enabled:
+                if report is not None:
+                    report["full_audio"] = self._evaluate_content_safety(
+                        text=transcript,
+                        segment_name=audio_path.name,
+                        content_safety_threshold=content_safety_threshold,
+                        content_safety_model=content_safety_model,
+                    )
+                self._last_content_safety_report = report
+                full_audio = report.get("full_audio") if report is not None else None
+                if (
+                    content_safety_filter
+                    and isinstance(full_audio, dict)
+                    and bool(full_audio.get("flagged", False))
+                ):
+                    self._status(
+                        "🚫 Filtered full transcript due to content safety policy"
+                    )
+                    return ""
+            return transcript
 
         if preserve_speaker:
             if shutil.which("ffmpeg") is None:
@@ -318,7 +387,29 @@ class VideoGenerationPipeline:
                 self._status(
                     "🧩 Transcribing audio with speaker diarization (full file)"
                 )
-                return self._gateway.transcribe_audio_with_speakers(audio_path)
+                transcript = self._gateway.transcribe_audio_with_speakers(audio_path)
+                if content_safety_enabled:
+                    if report is not None:
+                        report["full_audio"] = self._evaluate_content_safety(
+                            text=transcript,
+                            segment_name=audio_path.name,
+                            content_safety_threshold=content_safety_threshold,
+                            content_safety_model=content_safety_model,
+                        )
+                    self._last_content_safety_report = report
+                    full_audio = (
+                        report.get("full_audio") if report is not None else None
+                    )
+                    if (
+                        content_safety_filter
+                        and isinstance(full_audio, dict)
+                        and bool(full_audio.get("flagged", False))
+                    ):
+                        self._status(
+                            "🚫 Filtered full transcript due to content safety policy"
+                        )
+                        return ""
+                return transcript
             chunk_dir = chunk_dir_root / f"{audio_path.stem}_{uuid4().hex[:8]}"
             self._status(f"✂️ Chunking audio into ~{int(chunk_seconds)}s segments")
             chunks = self._media.chunk_audio(
@@ -337,10 +428,35 @@ class VideoGenerationPipeline:
                 self._status(
                     f"  Chunk {chunk_idx}/{len(chunks)} complete in {elapsed:.1f}s"
                 )
+                if content_safety_enabled:
+                    evaluation = self._evaluate_content_safety(
+                        text=text,
+                        segment_name=chunk_path.name,
+                        content_safety_threshold=content_safety_threshold,
+                        content_safety_model=content_safety_model,
+                    )
+                    evaluation["chunk_index"] = chunk_idx
+                    if report is not None:
+                        chunks_report = report.get("chunks")
+                        if isinstance(chunks_report, list):
+                            chunks_report.append(evaluation)
+                    if content_safety_filter and bool(evaluation.get("flagged", False)):
+                        if report is not None:
+                            report["dropped_chunks"] = (
+                                self._as_int(report.get("dropped_chunks")) + 1
+                            )
+                        self._status(
+                            f"🚫 Filtered chunk {chunk_idx}/{len(chunks)} ({chunk_path.name})"
+                        )
+                        continue
+
+                if report is not None:
+                    report["kept_chunks"] = self._as_int(report.get("kept_chunks")) + 1
                 chunk_texts.append(text)
             total_elapsed = perf_counter() - total_start
             self._status(f"⏱️ Chunk processing completed in {total_elapsed:.1f}s")
             shutil.rmtree(chunk_dir, ignore_errors=True)
+            self._last_content_safety_report = report
             return "\n".join(chunk_texts)
 
         if shutil.which("ffmpeg") is None:
@@ -348,7 +464,27 @@ class VideoGenerationPipeline:
                 "⚠️ ffmpeg not found; falling back to single-pass transcription"
             )
             self._status("📝 Transcribing audio with speech-to-text model")
-            return self._gateway.transcribe_audio(audio_path)
+            transcript = self._gateway.transcribe_audio(audio_path)
+            if content_safety_enabled:
+                if report is not None:
+                    report["full_audio"] = self._evaluate_content_safety(
+                        text=transcript,
+                        segment_name=audio_path.name,
+                        content_safety_threshold=content_safety_threshold,
+                        content_safety_model=content_safety_model,
+                    )
+                self._last_content_safety_report = report
+                full_audio = report.get("full_audio") if report is not None else None
+                if (
+                    content_safety_filter
+                    and isinstance(full_audio, dict)
+                    and bool(full_audio.get("flagged", False))
+                ):
+                    self._status(
+                        "🚫 Filtered full transcript due to content safety policy"
+                    )
+                    return ""
+            return transcript
 
         chunk_dir = chunk_dir_root / f"{audio_path.stem}_{uuid4().hex[:8]}"
         self._status(f"✂️ Chunking audio into ~{int(chunk_seconds)}s segments")
@@ -367,11 +503,100 @@ class VideoGenerationPipeline:
             text = self._gateway.transcribe_audio(chunk).strip()
             elapsed = perf_counter() - chunk_start
             self._status(f"  Chunk {index}/{len(chunks)} complete in {elapsed:.1f}s")
-            if text:
-                chunk_texts.append(text)
+            if not text:
+                continue
+
+            if content_safety_enabled:
+                evaluation = self._evaluate_content_safety(
+                    text=text,
+                    segment_name=chunk.name,
+                    content_safety_threshold=content_safety_threshold,
+                    content_safety_model=content_safety_model,
+                )
+                evaluation["chunk_index"] = index
+                if report is not None:
+                    chunks_report = report.get("chunks")
+                    if isinstance(chunks_report, list):
+                        chunks_report.append(evaluation)
+
+                if content_safety_filter and bool(evaluation.get("flagged", False)):
+                    if report is not None:
+                        report["dropped_chunks"] = (
+                            self._as_int(report.get("dropped_chunks")) + 1
+                        )
+                    self._status(
+                        f"🚫 Filtered chunk {index}/{len(chunks)} ({chunk.name})"
+                    )
+                    continue
+
+            if report is not None:
+                report["kept_chunks"] = self._as_int(report.get("kept_chunks")) + 1
+            chunk_texts.append(text)
         total_elapsed = perf_counter() - total_start
         self._status(f"⏱️ Chunk processing completed in {total_elapsed:.1f}s")
+        self._last_content_safety_report = report
         return " ".join(chunk_texts).strip()
+
+    def _evaluate_content_safety(
+        self,
+        *,
+        text: str,
+        segment_name: str,
+        content_safety_threshold: float,
+        content_safety_model: str | None,
+    ) -> dict[str, object]:
+        if not text.strip():
+            return {
+                "segment": segment_name,
+                "text_length": 0,
+                "flagged": False,
+                "unsafe_score": 0.0,
+                "top_label": "",
+                "top_score": 0.0,
+                "labels": [],
+            }
+
+        moderation = self._gateway.classify_content_safety(
+            text, model=content_safety_model
+        )
+        unsafe_score = float(moderation.get("unsafe_score", 0.0) or 0.0)
+        return {
+            "segment": segment_name,
+            "text_length": len(text),
+            "flagged": unsafe_score >= content_safety_threshold,
+            "unsafe_score": unsafe_score,
+            "top_label": str(moderation.get("top_label", "")),
+            "top_score": float(moderation.get("top_score", 0.0) or 0.0),
+            "labels": moderation.get("labels", []),
+        }
+
+    def _emit_content_safety_summary(self) -> None:
+        if self._last_content_safety_report is None:
+            return
+
+        dropped = self._as_int(self._last_content_safety_report.get("dropped_chunks"))
+        kept = self._as_int(self._last_content_safety_report.get("kept_chunks"))
+        threshold = self._last_content_safety_report.get("threshold")
+        model = self._last_content_safety_report.get("model")
+        self._status(
+            "🛡️ Content safety summary: "
+            f"model={model}, threshold={threshold}, kept={kept}, dropped={dropped}"
+        )
+
+    @staticmethod
+    def _as_int(value: object, *, default: int = 0) -> int:
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except ValueError:
+                return default
+        return default
 
     def _write_manifest(self, run_dir: Path, manifest: dict[str, object]) -> None:
         (run_dir / "manifest.json").write_text(
@@ -381,8 +606,3 @@ class VideoGenerationPipeline:
     def _status(self, message: str) -> None:
         if self._status_callback is not None:
             self._status_callback(message)
-
-
-# a 45 second clip takes about 1.5 minutes to transcribe with speaker diarization, so chunk into ~45s segments by default to balance speed and context retention.
-# 8:07:28 (start)
-# 8:08:41 (end)
