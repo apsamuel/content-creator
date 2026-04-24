@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "video-generator"
+name = "content-creator"
 version = "0.1.0"
-description = "CLI-first AI video generation pipeline using Hugging Face inference APIs"
+description = "CLI-first AI content creation pipeline using Hugging Face inference APIs"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -24,7 +24,7 @@ diarization = [
 ]
 
 [project.scripts]
-video-generator = "video_generator.cli:cli"
+content-creator = "content_creator.cli:cli"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
