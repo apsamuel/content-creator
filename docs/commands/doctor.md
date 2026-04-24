@@ -39,13 +39,13 @@ flowchart TD
 Basic check:
 
 ```bash
-video-generator doctor
+content-creator doctor
 ```
 
 Check with explicit model overrides:
 
 ```bash
-video-generator \
+content-creator \
   -L mistralai/Mixtral-8x7B-Instruct-v0.1 \
   -S openai/whisper-large-v3 \
   -T espnet/kan-bayashi_ljspeech_vits \
@@ -56,7 +56,7 @@ video-generator \
 Check with debug traces enabled:
 
 ```bash
-video-generator --debug doctor
+content-creator --debug doctor
 ```
 
 ## Failure Modes to Expect

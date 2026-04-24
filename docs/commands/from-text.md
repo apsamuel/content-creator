@@ -65,7 +65,7 @@ flowchart TD
 Use explicit visual direction:
 
 ```bash
-video-generator from-text \
+content-creator from-text \
   --text-transcription "A short narration about ocean currents" \
   --video-prompt "cinematic ocean documentary, natural light, high detail" \
   --output ./output/ocean.mp4
@@ -74,7 +74,7 @@ video-generator from-text \
 Generate visual direction automatically:
 
 ```bash
-video-generator from-text \
+content-creator from-text \
   --text-transcription file://prompts/narration.txt \
   --generate-video-prompt \
   --output ./output/generated-style.mp4

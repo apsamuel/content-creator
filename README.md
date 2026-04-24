@@ -1,4 +1,4 @@
-# video-generator
+# content-creator
 
 CLI-first Python tool for generating videos for YouTube workflows using Hugging Face inference APIs.
 
@@ -51,7 +51,7 @@ Detailed command documentation with flowcharts is available in [docs/README.md](
 Generate a video from text and a visual prompt:
 
 ```bash
-video-generator from-text \
+content-creator from-text \
   --text-transcription "Welcome to the channel. Today we are exploring how coral reefs recover after storms." \
   --video-prompt "documentary b-roll of coral reefs recovering after a storm, cinematic nature photography, vivid oceans, natural lighting" \
   --output ./renders/coral-reef.mp4
@@ -63,7 +63,7 @@ Examples: `file://output/voicecall.txt` (relative) or `file:///Users/me/prompts/
 Generate a video from text and let the LLM create the visual direction from the narration:
 
 ```bash
-video-generator from-text \
+content-creator from-text \
   --text-transcription file://prompts/test-transcription.txt \
   --generate-video-prompt \
   --output ./renders/generated-direction.mp4
@@ -72,7 +72,7 @@ video-generator from-text \
 Generate a video from an existing audio file:
 
 ```bash
-video-generator from-audio \
+content-creator from-audio \
   --audio-file ./assets/voiceover.mp3 \
   --video-prompt "clean futuristic data center visuals with slow cinematic camera motion, blue accents, realistic lighting" \
   --preserve-speaker \
@@ -85,7 +85,7 @@ video-generator from-audio \
 Transcribe audio only:
 
 ```bash
-video-generator transcribe \
+content-creator transcribe \
   --audio-file ./assets/voiceover.mp3 \
   --preserve-speaker \
   --chunk-seconds 45 \
@@ -104,7 +104,7 @@ Requirements for `--preserve-speaker`:
 Enable debug mode (emoji status + verbose chunk progress + full tracebacks):
 
 ```bash
-video-generator --debug transcribe \
+content-creator --debug transcribe \
   --audio-file ./assets/voiceover.mp3 \
   --chunk-seconds 30
 ```
@@ -112,7 +112,7 @@ video-generator --debug transcribe \
 Override models from the CLI (takes precedence over environment variables):
 
 ```bash
-video-generator \
+content-creator \
   --llm-model mistralai/Mixtral-8x7B-Instruct-v0.1 \
   --stt-model openai/whisper-large-v3 \
   --tts-model espnet/kan-bayashi_ljspeech_vits \
@@ -128,13 +128,13 @@ Short aliases are also available: `-L`, `-S`, `-T`, `-I`.
 Compact short-flag example:
 
 ```bash
-video-generator -L mistralai/Mixtral-8x7B-Instruct-v0.1 -S openai/whisper-large-v3 -T espnet/kan-bayashi_ljspeech_vits -I stabilityai/stable-diffusion-xl-base-1.0 from-audio --audio-file ./assets/voiceover.mp3 --video-prompt "cinematic skyline at dawn" --chunk-seconds 45 --output ./renders/example-shortflags.mp4
+content-creator -L mistralai/Mixtral-8x7B-Instruct-v0.1 -S openai/whisper-large-v3 -T espnet/kan-bayashi_ljspeech_vits -I stabilityai/stable-diffusion-xl-base-1.0 from-audio --audio-file ./assets/voiceover.mp3 --video-prompt "cinematic skyline at dawn" --chunk-seconds 45 --output ./renders/example-shortflags.mp4
 ```
 
 Validate configuration:
 
 ```bash
-video-generator doctor
+content-creator doctor
 ```
 
 Run tests:

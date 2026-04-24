@@ -71,7 +71,7 @@ flowchart TD
 Prompt provided directly:
 
 ```bash
-video-generator from-audio \
+content-creator from-audio \
   --audio-file ./assets/voiceover.mp3 \
   --video-prompt "clean futuristic datacenter, cinematic camera movement, realistic light" \
   --chunk-seconds 45 \
@@ -81,7 +81,7 @@ video-generator from-audio \
 Prompt generated from transcript:
 
 ```bash
-video-generator from-audio \
+content-creator from-audio \
   --audio-file ./assets/voiceover.mp3 \
   --generate-video-prompt \
   --output ./output/generated-style-from-audio.mp4
@@ -90,7 +90,7 @@ video-generator from-audio \
 Speaker-preserving transcript mode:
 
 ```bash
-video-generator from-audio \
+content-creator from-audio \
   --audio-file ./assets/interview.wav \
   --generate-video-prompt \
   --preserve-speaker \

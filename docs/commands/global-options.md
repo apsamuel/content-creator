@@ -5,7 +5,7 @@ Global options are specified before the command name. They apply to all commands
 Example:
 
 ```bash
-video-generator --debug --llm-model mistralai/Mixtral-8x7B-Instruct-v0.1 from-text ...
+content-creator --debug --llm-model mistralai/Mixtral-8x7B-Instruct-v0.1 from-text ...
 ```
 
 ## Option Reference
@@ -44,7 +44,7 @@ For commands that build a pipeline (`from-text`, `from-audio`, `transcribe`), th
 
 ```mermaid
 flowchart TD
-    A[User runs video-generator with global options] --> B[Resolve environment and CLI model overrides]
+    A[User runs content-creator with global options] --> B[Resolve environment and CLI model overrides]
     B --> C[Build AppConfig]
     C --> D[Print startup check output]
     D --> E[Run selected subcommand]
@@ -59,7 +59,7 @@ flowchart TD
 Use global overrides to test models without editing environment files:
 
 ```bash
-video-generator \
+content-creator \
   -L mistralai/Mixtral-8x7B-Instruct-v0.1 \
   -S openai/whisper-large-v3 \
   -T espnet/kan-bayashi_ljspeech_vits \

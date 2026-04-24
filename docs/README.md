@@ -1,6 +1,6 @@
 # Documentation
 
-This directory contains detailed, command-level documentation for the video-generator CLI.
+This directory contains detailed, command-level documentation for the content-creator CLI.
 
 ## Command Docs
 

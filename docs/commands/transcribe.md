@@ -53,7 +53,7 @@ flowchart TD
 Write transcript to file:
 
 ```bash
-video-generator transcribe \
+content-creator transcribe \
   --audio-file ./assets/meeting.m4a \
   --chunk-seconds 45 \
   --output ./output/meeting.txt
@@ -62,7 +62,7 @@ video-generator transcribe \
 Print transcript directly:
 
 ```bash
-video-generator transcribe \
+content-creator transcribe \
   --audio-file ./assets/meeting.m4a \
   --chunk-seconds 0
 ```
@@ -70,7 +70,7 @@ video-generator transcribe \
 Use speaker labeling:
 
 ```bash
-video-generator transcribe \
+content-creator transcribe \
   --audio-file ./assets/interview.wav \
   --preserve-speaker \
   --output ./output/interview-speakers.txt
