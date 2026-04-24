@@ -30,6 +30,10 @@ Use `from-audio` when you already have narration audio and want matching visuals
 - Optional:
   - `--chunk-seconds FLOAT` (default `45.0`; set to `0` to disable chunking)
   - `--preserve-speaker / --no-preserve-speaker` (default `--no-preserve-speaker`)
+  - `--content-safety / --no-content-safety` (default `--no-content-safety`)
+  - `--content-safety-filter / --no-content-safety-filter` (default `--no-content-safety-filter`)
+  - `--content-safety-threshold FLOAT` (default `0.7`)
+  - `--content-safety-model TEXT` (default `unitary/unbiased-toxic-roberta`)
   - `--work-dir TEXT`
 
 ## STT and diarization behavior
@@ -37,6 +41,8 @@ Use `from-audio` when you already have narration audio and want matching visuals
 - Default mode uses STT with optional chunking (`--chunk-seconds`).
 - If `--preserve-speaker` is enabled, diarization is used so transcript lines are speaker-labeled.
 - Speaker-preserving mode requires diarization dependencies and model access.
+- If `--content-safety` is enabled, transcript text is labeled for unsafe content.
+- If `--content-safety-filter` is also enabled, flagged chunks are dropped before scene planning.
 
 ## Mechanism Flow
 
@@ -96,6 +102,20 @@ content-creator from-audio \
   --preserve-speaker \
   --chunk-seconds 0 \
   --output ./output/interview.mp4
+
+Moderate and filter transcript chunks before planning scenes:
+
+```bash
+content-creator from-audio \
+  --audio-file ./assets/voiceover.mp3 \
+  --generate-video-prompt \
+  --chunk-seconds 45 \
+  --content-safety \
+  --content-safety-filter \
+  --content-safety-threshold 0.8 \
+  --content-safety-model unitary/toxic-bert \
+  --output ./output/filtered.mp4
+```
 ```
 
 ## Failure Modes to Expect

@@ -20,6 +20,7 @@ This gives you a single CLI that uses:
 - text-to-speech for narration synthesis
 - stable diffusion for image generation
 - optional speaker diarization for speaker-labeled transcripts
+- optional content safety labeling/filtering on transcribed audio or chunks
 
 ## Requirements
 
@@ -93,6 +94,34 @@ content-creator transcribe \
 ```
 
 `--preserve-speaker` enables diarization + STT, producing speaker-labeled transcript lines like `SPEAKER_00: ...`.
+
+Content safety options (available on `from-audio` and `transcribe`):
+
+- `--content-safety` enables moderation labeling on transcript text (full-file or per chunk).
+- `--content-safety-filter` drops flagged transcript segments.
+- `--content-safety-threshold` controls flagging sensitivity (0.0 to 1.0, default `0.7`).
+- `--content-safety-model` selects the moderation model (default `unitary/unbiased-toxic-roberta`).
+
+Example with filtering enabled:
+
+```bash
+content-creator transcribe \
+  --audio-file ./assets/voiceover.mp3 \
+  --chunk-seconds 45 \
+  --content-safety \
+  --content-safety-filter \
+  --content-safety-threshold 0.8 \
+  --content-safety-model unitary/toxic-bert \
+  --output ./renders/voiceover-safe.txt
+```
+
+Hugging Face model families you can evaluate for safety labeling/filtering:
+
+- Toxicity / abuse classifiers: `unitary/unbiased-toxic-roberta`, `unitary/toxic-bert`
+- Moderation-focused text classifiers: `KoalaAI/Text-Moderation`, `NemoraAi/roberta-chat-moderation-X`
+- Guardrail-style classifiers: `allenai/wildguard`, `meta-llama/Llama-Guard-3-8B`
+
+Pick one model and tune the threshold with your own audio corpus before enforcing hard filtering in production.
 
 Requirements for `--preserve-speaker`:
 

@@ -24,12 +24,18 @@ Use `transcribe` when you only need transcript output, such as preparing script 
   - `--output FILE` (if omitted, transcript prints to terminal)
   - `--chunk-seconds FLOAT` (default `45.0`; set to `0` to disable chunking)
   - `--preserve-speaker / --no-preserve-speaker` (default `--no-preserve-speaker`)
+  - `--content-safety / --no-content-safety` (default `--no-content-safety`)
+  - `--content-safety-filter / --no-content-safety-filter` (default `--no-content-safety-filter`)
+  - `--content-safety-threshold FLOAT` (default `0.7`)
+  - `--content-safety-model TEXT` (default `unitary/unbiased-toxic-roberta`)
   - `--work-dir TEXT`
 
 ## Output behavior
 
 - With `--output`, transcript is written to the file and a success message is printed.
 - Without `--output`, transcript text is emitted directly to stdout.
+- With `--content-safety`, moderation labels are calculated for transcript text.
+- With both `--content-safety` and `--content-safety-filter`, flagged chunks are removed from output.
 
 ## Mechanism Flow
 
@@ -74,6 +80,19 @@ content-creator transcribe \
   --audio-file ./assets/interview.wav \
   --preserve-speaker \
   --output ./output/interview-speakers.txt
+
+Moderate and filter chunked transcript text:
+
+```bash
+content-creator transcribe \
+  --audio-file ./assets/meeting.m4a \
+  --chunk-seconds 45 \
+  --content-safety \
+  --content-safety-filter \
+  --content-safety-threshold 0.8 \
+  --content-safety-model unitary/toxic-bert \
+  --output ./output/meeting-safe.txt
+```
 ```
 
 ## Failure Modes to Expect
