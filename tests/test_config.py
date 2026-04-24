@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from video_generator.config import AppConfig
+from content_creator.config import AppConfig
 
 
 def test_from_env_requires_hf_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -84,5 +84,5 @@ def test_from_env_uses_builtin_model_defaults_when_env_missing(
     assert isinstance(config.models.image_model, str)
     assert config.models.llm_model == "meta-llama/Llama-3.1-8B-Instruct"
     assert config.models.stt_model == "openai/whisper-large-v3"
-    assert config.models.tts_model == "espnet/kan-bayashi_ljspeech_vits"
+    assert config.models.tts_model == "hexgrad/Kokoro-82M"
     assert config.models.image_model == "stabilityai/stable-diffusion-xl-base-1.0"

@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from video_generator.config import AppConfig, ModelConfig
-from video_generator.hf_client import HuggingFaceGateway
+from content_creator.config import AppConfig, ModelConfig
+from content_creator.hf_client import HuggingFaceGateway
 
 
 class FakeInferenceClient:
@@ -59,7 +59,7 @@ def _config(tmp_path: Path) -> AppConfig:
 def test_generate_text_uses_configured_model(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import video_generator.hf_client as hf_module
+    import content_creator.hf_client as hf_module
 
     monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
     gateway = HuggingFaceGateway(_config(tmp_path))
@@ -75,7 +75,7 @@ def test_generate_text_uses_configured_model(
 def test_synthesize_speech_writes_audio(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import video_generator.hf_client as hf_module
+    import content_creator.hf_client as hf_module
 
     monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
     gateway = HuggingFaceGateway(_config(tmp_path))
@@ -90,7 +90,7 @@ def test_synthesize_speech_writes_audio(
 def test_transcribe_audio_passes_bytes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import video_generator.hf_client as hf_module
+    import content_creator.hf_client as hf_module
 
     monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
     gateway = HuggingFaceGateway(_config(tmp_path))
@@ -108,7 +108,7 @@ def test_transcribe_audio_passes_bytes(
 def test_generate_image_raises_for_non_image(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import video_generator.hf_client as hf_module
+    import content_creator.hf_client as hf_module
 
     monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
     gateway = HuggingFaceGateway(_config(tmp_path))
@@ -125,7 +125,7 @@ def test_generate_image_raises_for_non_image(
 def test_transcribe_audio_with_speakers_uses_diarization_segments(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import video_generator.hf_client as hf_module
+    import content_creator.hf_client as hf_module
 
     monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
     monkeypatch.setattr(hf_module.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
@@ -188,7 +188,7 @@ def test_transcribe_audio_with_speakers_uses_diarization_segments(
 def test_transcribe_audio_with_speakers_merges_consecutive_segments(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import video_generator.hf_client as hf_module
+    import content_creator.hf_client as hf_module
 
     monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
     monkeypatch.setattr(hf_module.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
@@ -245,7 +245,7 @@ def test_transcribe_audio_with_speakers_merges_consecutive_segments(
 def test_transcribe_audio_with_speakers_raises_helpful_error_for_gated_models(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import video_generator.hf_client as hf_module
+    import content_creator.hf_client as hf_module
 
     monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
     monkeypatch.setattr(hf_module.shutil, "which", lambda _name: "/usr/bin/ffmpeg")

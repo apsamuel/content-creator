@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from video_generator.planner import ScenePlanner
+from content_creator.planner import ScenePlanner
 
 
 class StubLLM:

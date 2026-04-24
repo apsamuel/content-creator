@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from video_generator.media import MediaAssembler
-from video_generator.planner import Scene
+from content_creator.media import MediaAssembler
+from content_creator.planner import Scene
 
 
 class Completed:

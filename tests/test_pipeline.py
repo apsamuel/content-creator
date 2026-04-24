@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from video_generator.config import AppConfig, ModelConfig
-from video_generator.planner import Scene, VideoPromptPlan, VideoPromptPreclassification
-from video_generator.pipeline import VideoGenerationPipeline, wrap_transcription
+from content_creator.config import AppConfig, ModelConfig
+from content_creator.planner import Scene, VideoPromptPlan, VideoPromptPreclassification
+from content_creator.pipeline import VideoGenerationPipeline, wrap_transcription
 
 
 class FakeGateway:
@@ -95,7 +95,7 @@ def _config(tmp_path: Path) -> AppConfig:
 def test_transcribe_audio_file_writes_output(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import video_generator.pipeline as pipeline_module
+    import content_creator.pipeline as pipeline_module
 
     monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
     monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
@@ -137,7 +137,7 @@ def test_wrap_transcription_splits_long_line() -> None:
 def test_generate_from_text_writes_manifest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import video_generator.pipeline as pipeline_module
+    import content_creator.pipeline as pipeline_module
 
     monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
     monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
@@ -173,7 +173,7 @@ def test_generate_from_text_writes_manifest(
 def test_generate_from_text_can_generate_video_prompt(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import video_generator.pipeline as pipeline_module
+    import content_creator.pipeline as pipeline_module
 
     monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
     monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
@@ -211,7 +211,7 @@ def test_generate_from_text_can_generate_video_prompt(
 def test_transcribe_audio_file_falls_back_without_ffmpeg(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import video_generator.pipeline as pipeline_module
+    import content_creator.pipeline as pipeline_module
 
     monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
     monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
@@ -234,7 +234,7 @@ def test_transcribe_audio_file_falls_back_without_ffmpeg(
 def test_transcribe_audio_file_preserves_speaker_labels_with_chunking(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import video_generator.pipeline as pipeline_module
+    import content_creator.pipeline as pipeline_module
 
     monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
     monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
@@ -262,7 +262,7 @@ def test_transcribe_audio_file_preserves_speaker_labels_with_chunking(
 def test_transcribe_audio_file_preserves_speaker_labels_full_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import video_generator.pipeline as pipeline_module
+    import content_creator.pipeline as pipeline_module
 
     monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
     monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
@@ -286,7 +286,7 @@ def test_transcribe_audio_file_preserves_speaker_labels_full_file(
 def test_missing_video_dependencies_raises(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import video_generator.pipeline as pipeline_module
+    import content_creator.pipeline as pipeline_module
 
     monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
     monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)

@@ -5,8 +5,8 @@ from pathlib import Path
 from click.testing import CliRunner
 import pytest
 
-import video_generator.cli as cli_module
-from video_generator.config import AppConfig, ModelConfig
+import content_creator.cli as cli_module
+from content_creator.config import AppConfig, ModelConfig
 
 
 class FakePipeline:
