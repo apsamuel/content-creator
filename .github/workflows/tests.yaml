@@ -1,10 +1,13 @@
 name: Run Tests
 on: [push]
 env:
-  GOV_API_BASE_URL: ${{ vars.GOV_API_BASE_URL }}
-  GOV_API_KEY: ${{ secrets.GOV_API_KEY }}
-  CENSUS_API_BASE_URL: ${{ vars.CENSUS_API_BASE_URL }}
-  CENSUS_API_KEY: ${{ secrets.CENSUS_API_KEY }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  HF_LLM_MODEL: "meta-llama/Llama-3.1-8B-Instruct"
+  HF_STT_MODEL: "openai/whisper-large-v3"
+  HF_DIARIZATION_MODEL: "pyannote/speaker-diarization-3.1"
+  HF_TTS_MODEL: "hexgrad/Kokoro-82M"
+  HF_IMAGE_MODEL: "stabilityai/stable-diffusion-xl-base-1.0"
+  VIDEO_GENERATOR_WORK_DIR: "./output"
 jobs:
   run-pytest:
     runs-on: ubuntu-latest
