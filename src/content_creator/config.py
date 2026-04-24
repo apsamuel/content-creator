@@ -51,7 +51,7 @@ class AppConfig:
             return default_value
 
         base_dir = (
-            Path(work_dir or os.getenv("VIDEO_GENERATOR_WORK_DIR", "./output"))
+            Path(work_dir or os.getenv("CONTENT_CREATOR_WORK_DIR", "./output"))
             .expanduser()
             .resolve()
         )

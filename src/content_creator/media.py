@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Iterable
 
-from video_generator.planner import Scene
+from content_creator.planner import Scene
 
 
 class MediaAssembler:

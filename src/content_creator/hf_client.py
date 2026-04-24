@@ -11,7 +11,7 @@ from typing import Any
 from huggingface_hub import InferenceClient
 from PIL import Image
 
-from video_generator.config import AppConfig
+from content_creator.config import AppConfig
 
 
 @dataclass(slots=True)
@@ -70,7 +70,7 @@ class HuggingFaceGateway:
             ).strip()
             or "pyannote/speaker-diarization-3.1"
         )
-        with tempfile.TemporaryDirectory(prefix="video_generator_diarization_") as tmp:
+        with tempfile.TemporaryDirectory(prefix="content_creator_diarization_") as tmp:
             temp_dir = Path(tmp)
             prepared_audio_path = temp_dir / "prepared_audio.wav"
             print("🔄 Converting source audio for diarization (mono 16kHz WAV)...")

@@ -10,10 +10,10 @@ from time import perf_counter
 from typing import Callable
 from uuid import uuid4
 
-from video_generator.config import AppConfig
-from video_generator.hf_client import HuggingFaceGateway
-from video_generator.media import MediaAssembler
-from video_generator.planner import ScenePlanner, VideoPromptPlan
+from content_creator.config import AppConfig
+from content_creator.hf_client import HuggingFaceGateway
+from content_creator.media import MediaAssembler
+from content_creator.planner import ScenePlanner, VideoPromptPlan
 
 
 def wrap_transcription(text: str, *, width: int = 100) -> str:

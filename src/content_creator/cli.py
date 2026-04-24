@@ -6,8 +6,8 @@ from urllib.parse import unquote
 
 import click
 
-from video_generator.config import AppConfig
-from video_generator.pipeline import VideoGenerationPipeline
+from content_creator.config import AppConfig
+from content_creator.pipeline import VideoGenerationPipeline
 
 
 def _print_startup_check(config: AppConfig) -> None:
