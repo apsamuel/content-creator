@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import textwrap
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,6 +59,7 @@ class VideoGenerationPipeline:
         video_prompt: str | None,
         output_path: Path,
         generate_video_prompt: bool = False,
+        image_workers: int = 1,
     ) -> Path:
         self._ensure_video_dependencies()
         run_dir = self._prepare_run_dir(output_path)
@@ -92,6 +94,7 @@ class VideoGenerationPipeline:
             output_path=output_path,
             run_dir=run_dir,
             manifest=manifest,
+            image_workers=image_workers,
         )
 
     def generate_from_audio(
@@ -107,6 +110,8 @@ class VideoGenerationPipeline:
         content_safety_filter: bool = False,
         content_safety_threshold: float = 0.7,
         content_safety_model: str | None = None,
+        transcribe_workers: int = 1,
+        image_workers: int = 1,
     ) -> Path:
         self._ensure_video_dependencies()
         run_dir = self._prepare_run_dir(output_path)
@@ -123,6 +128,8 @@ class VideoGenerationPipeline:
             "content_safety_filter": content_safety_filter,
             "content_safety_threshold": content_safety_threshold,
             "content_safety_model": content_safety_model,
+            "transcribe_workers": transcribe_workers,
+            "image_workers": image_workers,
             "generate_video_prompt": generate_video_prompt,
             "video_prompt": video_prompt,
         }
@@ -136,6 +143,7 @@ class VideoGenerationPipeline:
             content_safety_filter=content_safety_filter,
             content_safety_threshold=content_safety_threshold,
             content_safety_model=content_safety_model,
+            transcribe_workers=transcribe_workers,
         )
         if not transcript.strip() and content_safety_enabled and content_safety_filter:
             raise ValueError(
@@ -160,6 +168,7 @@ class VideoGenerationPipeline:
             output_path=output_path,
             run_dir=run_dir,
             manifest=manifest,
+            image_workers=image_workers,
         )
 
     def transcribe_audio_file(
@@ -173,6 +182,7 @@ class VideoGenerationPipeline:
         content_safety_filter: bool = False,
         content_safety_threshold: float = 0.7,
         content_safety_model: str | None = None,
+        transcribe_workers: int = 1,
     ) -> str:
         transcript = self._transcribe_with_optional_chunking(
             audio_path=audio_path,
@@ -183,6 +193,7 @@ class VideoGenerationPipeline:
             content_safety_filter=content_safety_filter,
             content_safety_threshold=content_safety_threshold,
             content_safety_model=content_safety_model,
+            transcribe_workers=transcribe_workers,
         )
         self._emit_content_safety_summary()
         if output_path is not None:
@@ -203,6 +214,7 @@ class VideoGenerationPipeline:
         output_path: Path,
         run_dir: Path,
         manifest: dict[str, object] | None = None,
+        image_workers: int = 1,
     ) -> Path:
         if manifest is None:
             manifest = {
@@ -253,18 +265,63 @@ class VideoGenerationPipeline:
         manifest["images"] = []
         self._write_manifest(run_dir, manifest)
         self._status("🖼️ Generating images for scenes")
-        for scene in scenes:
-            if self._debug:
-                self._status(
-                    f"🐛 Rendering image for scene {scene.index}/{len(scenes)}"
+        total_scenes = len(scenes)
+        worker_count = max(1, image_workers)
+
+        def _render_scene_image(
+            scene_index: int, scene_prompt: str
+        ) -> tuple[int, Path, float]:
+            start = perf_counter()
+            destination = images_dir / f"scene_{scene_index:02d}.png"
+            self._gateway.generate_image(scene_prompt, destination)
+            return scene_index, destination, perf_counter() - start
+
+        rendered_paths: dict[int, Path] = {}
+        completed = 0
+
+        if worker_count == 1:
+            for scene in scenes:
+                if self._debug:
+                    self._status(
+                        f"🐛 Rendering image for scene {scene.index}/{len(scenes)}"
+                    )
+                scene_index, image_path, elapsed = _render_scene_image(
+                    scene.index, scene.prompt
                 )
-            image_path = images_dir / f"scene_{scene.index:02d}.png"
-            self._gateway.generate_image(scene.prompt, image_path)
-            image_paths.append(image_path)
-            images = manifest.get("images")
-            if isinstance(images, list):
-                images.append(str(image_path))
-                self._write_manifest(run_dir, manifest)
+                rendered_paths[scene_index] = image_path
+                completed += 1
+                self._emit_progress(
+                    "📷 Image generation progress",
+                    current=completed,
+                    total=total_scenes,
+                    elapsed_seconds=elapsed,
+                )
+        else:
+            self._status(f"🧵 Using {worker_count} workers for image generation")
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = {
+                    executor.submit(
+                        _render_scene_image, scene.index, scene.prompt
+                    ): scene
+                    for scene in scenes
+                }
+                for future in as_completed(futures):
+                    scene_index, image_path, elapsed = future.result()
+                    rendered_paths[scene_index] = image_path
+                    completed += 1
+                    self._emit_progress(
+                        "📷 Image generation progress",
+                        current=completed,
+                        total=total_scenes,
+                        elapsed_seconds=elapsed,
+                    )
+
+        image_paths = [rendered_paths[index] for index in sorted(rendered_paths)]
+        images = manifest.get("images")
+        if isinstance(images, list):
+            images.clear()
+            images.extend(str(path) for path in image_paths)
+            self._write_manifest(run_dir, manifest)
 
         manifest["status"] = "assembling_video"
         self._write_manifest(run_dir, manifest)
@@ -332,6 +389,7 @@ class VideoGenerationPipeline:
         content_safety_filter: bool,
         content_safety_threshold: float,
         content_safety_model: str | None,
+        transcribe_workers: int,
     ) -> str:
         self._last_content_safety_report = None
         report: dict[str, object] | None = None
@@ -425,8 +483,11 @@ class VideoGenerationPipeline:
                 chunk_start = perf_counter()
                 text = self._gateway.transcribe_audio_with_speakers(chunk_path)
                 elapsed = perf_counter() - chunk_start
-                self._status(
-                    f"  Chunk {chunk_idx}/{len(chunks)} complete in {elapsed:.1f}s"
+                self._emit_progress(
+                    "Diarization chunk progress",
+                    current=chunk_idx,
+                    total=len(chunks),
+                    elapsed_seconds=elapsed,
                 )
                 if content_safety_enabled:
                     evaluation = self._evaluate_content_safety(
@@ -494,15 +555,56 @@ class VideoGenerationPipeline:
         self._status(f"📝 Transcribing {len(chunks)} audio chunks")
         chunk_texts: list[str] = []
         total_start = perf_counter()
-        for index, chunk in enumerate(chunks, start=1):
-            if self._debug:
-                self._status(
-                    f"🐛 Transcribing chunk {index}/{len(chunks)}: {chunk.name}"
-                )
+        worker_count = max(1, transcribe_workers)
+
+        def _transcribe_chunk(
+            chunk_index: int, chunk_path: Path
+        ) -> tuple[int, str, float]:
             chunk_start = perf_counter()
-            text = self._gateway.transcribe_audio(chunk).strip()
-            elapsed = perf_counter() - chunk_start
-            self._status(f"  Chunk {index}/{len(chunks)} complete in {elapsed:.1f}s")
+            chunk_text = self._gateway.transcribe_audio(chunk_path).strip()
+            elapsed_seconds = perf_counter() - chunk_start
+            return chunk_index, chunk_text, elapsed_seconds
+
+        chunk_results: dict[int, str] = {}
+        completed = 0
+
+        if worker_count == 1:
+            for index, chunk in enumerate(chunks, start=1):
+                if self._debug:
+                    self._status(
+                        f"🐛 Transcribing chunk {index}/{len(chunks)}: {chunk.name}"
+                    )
+                _, text, elapsed = _transcribe_chunk(index, chunk)
+                completed += 1
+                self._emit_progress(
+                    "Transcription chunk progress",
+                    current=completed,
+                    total=len(chunks),
+                    elapsed_seconds=elapsed,
+                )
+                if text:
+                    chunk_results[index] = text
+        else:
+            self._status(f"🧵 Using {worker_count} workers for chunk transcription")
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = {
+                    executor.submit(_transcribe_chunk, index, chunk): chunk
+                    for index, chunk in enumerate(chunks, start=1)
+                }
+                for future in as_completed(futures):
+                    index, text, elapsed = future.result()
+                    completed += 1
+                    self._emit_progress(
+                        "Transcription chunk progress",
+                        current=completed,
+                        total=len(chunks),
+                        elapsed_seconds=elapsed,
+                    )
+                    if text:
+                        chunk_results[index] = text
+
+        for index, chunk in enumerate(chunks, start=1):
+            text = chunk_results.get(index, "")
             if not text:
                 continue
 
@@ -598,6 +700,28 @@ class VideoGenerationPipeline:
                 return default
         return default
 
+    def _emit_progress(
+        self,
+        label: str,
+        *,
+        current: int,
+        total: int,
+        elapsed_seconds: float | None = None,
+    ) -> None:
+        if total <= 0:
+            return
+        bounded_current = max(0, min(current, total))
+        remaining = total - bounded_current
+        ratio = bounded_current / total
+        width = 24
+        filled = int(ratio * width)
+        bar = "#" * filled + "-" * (width - filled)
+        percent = int(ratio * 100)
+        details = f"chunk {bounded_current}/{total}, {remaining} remaining"
+        if elapsed_seconds is not None:
+            details = f"{details}, {elapsed_seconds:.1f}s"
+        self._status(f"{label}: [{bar}] {percent}% ({details})")
+
     def _write_manifest(self, run_dir: Path, manifest: dict[str, object]) -> None:
         (run_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2), encoding="utf-8"
@@ -605,4 +729,38 @@ class VideoGenerationPipeline:
 
     def _status(self, message: str) -> None:
         if self._status_callback is not None:
+            normalized = message.strip()
+            if normalized and not self._starts_with_emoji(normalized):
+                message = f"ℹ️ {message}"
             self._status_callback(message)
+
+    @staticmethod
+    def _starts_with_emoji(value: str) -> bool:
+        return value.startswith(
+            (
+                "🔎",
+                "📁",
+                "🧠",
+                "🎧",
+                "🔊",
+                "🛡",
+                "🎙",
+                "🖼",
+                "⏱",
+                "🧪",
+                "🪄",
+                "🧩",
+                "🐛",
+                "✂",
+                "📝",
+                "⚠",
+                "🚫",
+                "🧵",
+                "✅",
+                "📷",
+                "🎬",
+                "💾",
+                "ℹ",
+                "❌",
+            )
+        )

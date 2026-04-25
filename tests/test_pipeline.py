@@ -142,6 +142,8 @@ def test_transcribe_audio_file_writes_output(
     assert text == "transcribed chunk_0000 transcribed chunk_0001"
     assert output_path.read_text(encoding="utf-8") == wrap_transcription(text)
     assert "✂️ Chunking audio into ~45s segments" in status_messages
+    assert any("Transcription chunk progress:" in msg for msg in status_messages)
+    assert not any("Chunk 1/2 complete" in msg for msg in status_messages)
     assert "✅ Transcription complete" in status_messages
 
 
@@ -193,6 +195,34 @@ def test_generate_from_text_writes_manifest(
     assert manifest["video_prompt_preclassification"] is None
     assert len(manifest["scenes"]) == 2
     assert any(msg.startswith("🐛 Rendering image for scene") for msg in statuses)
+
+
+def test_generate_from_text_uses_threaded_image_workers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    statuses: list[str] = []
+    pipeline = VideoGenerationPipeline(
+        _config(tmp_path), status_callback=statuses.append
+    )
+    output_path = tmp_path / "out" / "threaded-images.mp4"
+
+    result = pipeline.generate_from_text(
+        narration_text="Narration",
+        video_prompt="Video direction",
+        output_path=output_path,
+        image_workers=2,
+    )
+
+    assert result == output_path
+    assert output_path.exists()
+    assert any("Using 2 workers for image generation" in msg for msg in statuses)
 
 
 def test_generate_from_text_can_generate_video_prompt(
@@ -336,6 +366,31 @@ def test_transcribe_audio_file_filters_flagged_chunks_when_enabled(
     assert text == "transcribed chunk_0000"
     assert any("Filtered chunk" in status for status in statuses)
     assert any("Content safety summary" in status for status in statuses)
+
+
+def test_transcribe_audio_file_uses_threaded_workers_and_keeps_order(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    statuses: list[str] = []
+    pipeline = VideoGenerationPipeline(
+        _config(tmp_path), status_callback=statuses.append
+    )
+    audio_path = tmp_path / "threaded.m4a"
+    audio_path.write_bytes(b"audio")
+
+    text = pipeline.transcribe_audio_file(
+        audio_path=audio_path, chunk_seconds=45.0, transcribe_workers=3
+    )
+
+    assert text == "transcribed chunk_0000 transcribed chunk_0001"
+    assert any("Using 3 workers" in status for status in statuses)
 
 
 def test_missing_video_dependencies_raises(

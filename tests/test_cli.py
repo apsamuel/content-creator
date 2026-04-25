@@ -512,6 +512,209 @@ def test_transcribe_passes_content_safety_options(monkeypatch, tmp_path: Path) -
     assert fake_pipeline.calls[0][2]["content_safety_model"] == "unitary/toxic-bert"
 
 
+def test_transcribe_passes_transcribe_workers(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        ["transcribe", "--audio-file", str(audio_file), "--transcribe-workers", "3"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["transcribe_workers"] == 3
+
+
+def test_from_audio_passes_transcribe_workers(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-audio",
+            "--audio-file",
+            str(audio_file),
+            "--video-prompt",
+            "Style",
+            "--transcribe-workers",
+            "4",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["transcribe_workers"] == 4
+
+
+def test_transcribe_uses_hf_transcribe_workers_env_default(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setenv("HF_TRANSCRIBE_WORKERS", "3")
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli, ["transcribe", "--audio-file", str(audio_file)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["transcribe_workers"] == 3
+
+
+def test_from_audio_uses_hf_transcribe_workers_env_default(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setenv("HF_TRANSCRIBE_WORKERS", "2")
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-audio",
+            "--audio-file",
+            str(audio_file),
+            "--video-prompt",
+            "Style",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["transcribe_workers"] == 2
+
+
+def test_from_text_passes_image_workers(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-text",
+            "--text-transcription",
+            "Narration",
+            "--video-prompt",
+            "Style",
+            "--image-workers",
+            "3",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["image_workers"] == 3
+
+
+def test_from_audio_passes_image_workers(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-audio",
+            "--audio-file",
+            str(audio_file),
+            "--video-prompt",
+            "Style",
+            "--image-workers",
+            "4",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["image_workers"] == 4
+
+
+def test_from_text_uses_hf_image_workers_env_default(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setenv("HF_IMAGE_WORKERS", "3")
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-text",
+            "--text-transcription",
+            "Narration",
+            "--video-prompt",
+            "Style",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["image_workers"] == 3
+
+
+def test_from_audio_uses_hf_image_workers_env_default(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setenv("HF_IMAGE_WORKERS", "2")
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-audio",
+            "--audio-file",
+            str(audio_file),
+            "--video-prompt",
+            "Style",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["image_workers"] == 2
+
+
 def test_from_audio_passes_content_safety_options(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
     fake_pipeline = FakePipeline()
@@ -575,3 +778,16 @@ def test_from_audio_requires_video_prompt_without_generation(
         "Error: --video-prompt is required unless --generate-video-prompt is enabled"
         in result.output
     )
+
+
+def test_status_callback_hides_progress_when_disabled(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    callback = cli_module._make_status_callback(progress_enabled=False)
+
+    callback("Transcription chunk progress: [############------------] 1/2 (50%)")
+    callback("✅ Transcription complete")
+
+    captured = capsys.readouterr()
+    assert "Transcription chunk progress:" not in captured.out
+    assert "✅ Transcription complete" in captured.out

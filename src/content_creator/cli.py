@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Callable
 from urllib.parse import unquote
@@ -16,6 +17,8 @@ def _print_startup_check(config: AppConfig) -> None:
     click.echo(f"🧠 LLM model: {config.models.llm_model}")
     click.echo(f"🎧 STT model: {config.models.stt_model}")
     click.echo(f"🔊 TTS model: {config.models.tts_model}")
+    click.echo(f"🛡️ Content safety model: {config.models.safety_model}")
+    click.echo(f"🎙️ Diarization model: {config.models.diarization_model}")
     click.echo(f"🖼️ Image model: {config.models.image_model}")
 
 
@@ -47,6 +50,15 @@ def _build_pipeline(
 
 def _status(message: str) -> None:
     click.echo(message)
+
+
+def _make_status_callback(*, progress_enabled: bool) -> Callable[[str], None]:
+    def _callback(message: str) -> None:
+        if not progress_enabled and "progress:" in message:
+            return
+        click.echo(message)
+
+    return _callback
 
 
 def _resolve_text_option(value: str, *, option_name: str) -> str:
@@ -100,6 +112,30 @@ def _resolve_video_prompt_request(
     )
 
 
+def _resolve_worker_count(
+    value: int | None, *, env_var: str, option_name: str, default: int = 1
+) -> int:
+    if value is not None:
+        return value
+
+    raw_value = os.getenv(env_var, "").strip()
+    if not raw_value:
+        return default
+
+    try:
+        resolved = int(raw_value)
+    except ValueError as exc:
+        raise click.ClickException(
+            f"{option_name} must be an integer >= 1 (from {env_var})"
+        ) from exc
+
+    if resolved < 1:
+        raise click.ClickException(
+            f"{option_name} must be an integer >= 1 (from {env_var})"
+        )
+    return resolved
+
+
 @click.group()
 @click.option(
     "--debug/--no-debug",
@@ -128,6 +164,12 @@ def _resolve_video_prompt_request(
     default=None,
     help="Override the image generation model for visuals.",
 )
+@click.option(
+    "--progress/--no-progress",
+    default=True,
+    show_default=True,
+    help="Show progress bars for long-running operations.",
+)
 @click.pass_context
 def cli(
     ctx: click.Context,
@@ -136,6 +178,7 @@ def cli(
     stt_model: str | None,
     tts_model: str | None,
     image_model: str | None,
+    progress: bool,
 ) -> None:
     """CLI-first AI video generation built on Hugging Face inference APIs."""
     ctx.ensure_object(dict)
@@ -144,6 +187,7 @@ def cli(
     ctx.obj["stt_model"] = stt_model
     ctx.obj["tts_model"] = tts_model
     ctx.obj["image_model"] = image_model
+    ctx.obj["progress"] = progress
     if debug:
         click.echo("🐛 Debug mode enabled")
 
@@ -171,6 +215,13 @@ def cli(
     required=True,
     type=click.Path(dir_okay=False, path_type=Path),
 )
+@click.option(
+    "--image-workers",
+    default=None,
+    show_default=False,
+    type=click.IntRange(1, None),
+    help="Number of worker threads for scene image generation (default: HF_IMAGE_WORKERS or 1).",
+)
 @click.option("--work-dir", default=None, help="Directory for intermediate assets.")
 @click.pass_context
 def from_text(
@@ -179,6 +230,7 @@ def from_text(
     video_prompt: str | None,
     generate_video_prompt: bool,
     output_path: Path,
+    image_workers: int | None,
     work_dir: str | None,
 ) -> None:
     """Generate narration with TTS and create a matching AI video."""
@@ -192,10 +244,15 @@ def from_text(
             generate_video_prompt=generate_video_prompt,
             option_name="--video-prompt",
         )
+        resolved_image_workers = _resolve_worker_count(
+            image_workers, env_var="HF_IMAGE_WORKERS", option_name="--image-workers"
+        )
         pipeline = _build_pipeline(
             work_dir=work_dir,
             debug=bool(ctx.obj.get("debug", False)),
-            status_callback=_status,
+            status_callback=_make_status_callback(
+                progress_enabled=bool(ctx.obj.get("progress", True))
+            ),
             llm_model=ctx.obj.get("llm_model"),
             stt_model=ctx.obj.get("stt_model"),
             tts_model=ctx.obj.get("tts_model"),
@@ -206,6 +263,7 @@ def from_text(
             video_prompt=resolved_video_prompt,
             generate_video_prompt=generate_video_prompt,
             output_path=output_path,
+            image_workers=resolved_image_workers,
         )
         click.echo(f"✅ Video written to {result}")
 
@@ -236,11 +294,25 @@ def from_text(
     type=click.Path(dir_okay=False, path_type=Path),
 )
 @click.option(
+    "--image-workers",
+    default=None,
+    show_default=False,
+    type=click.IntRange(1, None),
+    help="Number of worker threads for scene image generation (default: HF_IMAGE_WORKERS or 1).",
+)
+@click.option(
     "--chunk-seconds",
     default=45.0,
     show_default=True,
     type=float,
     help="Chunk duration for STT requests. Set to 0 to disable chunking.",
+)
+@click.option(
+    "--transcribe-workers",
+    default=None,
+    show_default=False,
+    type=click.IntRange(1, None),
+    help="Number of worker threads for chunk transcription (default: HF_TRANSCRIBE_WORKERS or 1).",
 )
 @click.option(
     "--preserve-speaker/--no-preserve-speaker",
@@ -280,7 +352,9 @@ def from_audio(
     video_prompt: str | None,
     generate_video_prompt: bool,
     output_path: Path,
+    image_workers: int | None,
     chunk_seconds: float,
+    transcribe_workers: int | None,
     preserve_speaker: bool,
     content_safety: bool,
     content_safety_filter: bool,
@@ -296,10 +370,20 @@ def from_audio(
             generate_video_prompt=generate_video_prompt,
             option_name="--video-prompt",
         )
+        resolved_image_workers = _resolve_worker_count(
+            image_workers, env_var="HF_IMAGE_WORKERS", option_name="--image-workers"
+        )
+        resolved_transcribe_workers = _resolve_worker_count(
+            transcribe_workers,
+            env_var="HF_TRANSCRIBE_WORKERS",
+            option_name="--transcribe-workers",
+        )
         pipeline = _build_pipeline(
             work_dir=work_dir,
             debug=bool(ctx.obj.get("debug", False)),
-            status_callback=_status,
+            status_callback=_make_status_callback(
+                progress_enabled=bool(ctx.obj.get("progress", True))
+            ),
             llm_model=ctx.obj.get("llm_model"),
             stt_model=ctx.obj.get("stt_model"),
             tts_model=ctx.obj.get("tts_model"),
@@ -310,7 +394,9 @@ def from_audio(
             video_prompt=resolved_video_prompt,
             generate_video_prompt=generate_video_prompt,
             output_path=output_path,
+            image_workers=resolved_image_workers,
             chunk_seconds=chunk_seconds,
+            transcribe_workers=resolved_transcribe_workers,
             preserve_speaker=preserve_speaker,
             content_safety_enabled=content_safety,
             content_safety_filter=content_safety_filter,
@@ -341,6 +427,13 @@ def from_audio(
     show_default=True,
     type=float,
     help="Chunk duration for STT requests. Set to 0 to disable chunking.",
+)
+@click.option(
+    "--transcribe-workers",
+    default=None,
+    show_default=False,
+    type=click.IntRange(1, None),
+    help="Number of worker threads for chunk transcription (default: HF_TRANSCRIBE_WORKERS or 1).",
 )
 @click.option(
     "--preserve-speaker/--no-preserve-speaker",
@@ -379,6 +472,7 @@ def transcribe(
     audio_file: Path,
     output_path: Path | None,
     chunk_seconds: float,
+    transcribe_workers: int | None,
     preserve_speaker: bool,
     content_safety: bool,
     content_safety_filter: bool,
@@ -389,10 +483,17 @@ def transcribe(
     """Generate a transcript for an audio file using the configured AI STT model."""
 
     def _operation() -> None:
+        resolved_transcribe_workers = _resolve_worker_count(
+            transcribe_workers,
+            env_var="HF_TRANSCRIBE_WORKERS",
+            option_name="--transcribe-workers",
+        )
         pipeline = _build_pipeline(
             work_dir=work_dir,
             debug=bool(ctx.obj.get("debug", False)),
-            status_callback=_status,
+            status_callback=_make_status_callback(
+                progress_enabled=bool(ctx.obj.get("progress", True))
+            ),
             llm_model=ctx.obj.get("llm_model"),
             stt_model=ctx.obj.get("stt_model"),
             tts_model=ctx.obj.get("tts_model"),
@@ -402,6 +503,7 @@ def transcribe(
             audio_path=audio_file,
             output_path=output_path,
             chunk_seconds=chunk_seconds,
+            transcribe_workers=resolved_transcribe_workers,
             preserve_speaker=preserve_speaker,
             content_safety_enabled=content_safety,
             content_safety_filter=content_safety_filter,
@@ -432,7 +534,11 @@ def doctor(ctx: click.Context, work_dir: str | None) -> None:
                 image_model=ctx.obj.get("image_model"),
             )
             VideoGenerationPipeline(
-                config, debug=bool(ctx.obj.get("debug", False)), status_callback=_status
+                config,
+                debug=bool(ctx.obj.get("debug", False)),
+                status_callback=_make_status_callback(
+                    progress_enabled=bool(ctx.obj.get("progress", True))
+                ),
             )
         except (RuntimeError, ValueError) as exc:
             raise click.ClickException(str(exc)) from exc

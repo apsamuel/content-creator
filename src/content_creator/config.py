@@ -10,6 +10,8 @@ class ModelConfig:
     llm_model: str = "meta-llama/Llama-3.1-8B-Instruct"
     stt_model: str = "openai/whisper-large-v3"
     tts_model: str = "hexgrad/Kokoro-82M"
+    safety_model: str = "unitary/unbiased-toxic-roberta"
+    diarization_model: str = "pyannote/speaker-diarization-3.1"
     image_model: str = "stabilityai/stable-diffusion-xl-base-1.0"
 
 
