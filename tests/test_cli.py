@@ -481,6 +481,132 @@ def test_transcribe_passes_preserve_speaker(monkeypatch, tmp_path: Path) -> None
     assert fake_pipeline.calls[0][2]["preserve_speaker"] is True
 
 
+def test_transcribe_passes_diarization_speaker_constraints(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "transcribe",
+            "--audio-file",
+            str(audio_file),
+            "--preserve-speaker",
+            "--min-speakers",
+            "1",
+            "--max-speakers",
+            "2",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["diarization_speaker_count"] is None
+    assert fake_pipeline.calls[0][2]["diarization_min_speakers"] == 1
+    assert fake_pipeline.calls[0][2]["diarization_max_speakers"] == 2
+
+
+def test_transcribe_rejects_conflicting_diarization_speaker_options(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "transcribe",
+            "--audio-file",
+            str(audio_file),
+            "--preserve-speaker",
+            "--speaker-count",
+            "1",
+            "--min-speakers",
+            "1",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--speaker-count cannot be used" in result.output
+
+
+def test_transcribe_passes_speaker_dominance_threshold(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "transcribe",
+            "--audio-file",
+            str(audio_file),
+            "--speaker-dominance-threshold",
+            "0.95",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["speaker_dominance_threshold"] == 0.95
+
+
+def test_transcribe_uses_speaker_dominance_threshold_env_default(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setenv("HF_SPEAKER_DOMINANCE_THRESHOLD", "0.85")
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli, ["transcribe", "--audio-file", str(audio_file)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["speaker_dominance_threshold"] == 0.85
+
+
+def test_transcribe_rejects_invalid_speaker_dominance_threshold_env(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setenv("HF_SPEAKER_DOMINANCE_THRESHOLD", "1.5")
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli, ["transcribe", "--audio-file", str(audio_file)]
+    )
+
+    assert result.exit_code != 0
+    assert "--speaker-dominance-threshold must be between 0.0 and 1.0" in result.output
+
+
 def test_transcribe_passes_content_safety_options(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
     fake_pipeline = FakePipeline()
@@ -556,6 +682,69 @@ def test_from_audio_passes_transcribe_workers(monkeypatch, tmp_path: Path) -> No
 
     assert result.exit_code == 0, result.output
     assert fake_pipeline.calls[0][2]["transcribe_workers"] == 4
+
+
+def test_from_audio_passes_diarization_speaker_count(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-audio",
+            "--audio-file",
+            str(audio_file),
+            "--video-prompt",
+            "Style",
+            "--preserve-speaker",
+            "--speaker-count",
+            "1",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["diarization_speaker_count"] == 1
+    assert fake_pipeline.calls[0][2]["diarization_min_speakers"] is None
+    assert fake_pipeline.calls[0][2]["diarization_max_speakers"] is None
+
+
+def test_from_audio_passes_speaker_dominance_threshold(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-audio",
+            "--audio-file",
+            str(audio_file),
+            "--video-prompt",
+            "Style",
+            "--speaker-dominance-threshold",
+            "0.92",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["speaker_dominance_threshold"] == 0.92
 
 
 def test_transcribe_uses_hf_transcribe_workers_env_default(

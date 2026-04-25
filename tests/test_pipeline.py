@@ -6,7 +6,14 @@ from pathlib import Path
 import pytest
 
 from content_creator.config import AppConfig, ModelConfig
-from content_creator.planner import Scene, VideoPromptPlan, VideoPromptPreclassification
+from content_creator.planner import (
+    InteractionStyleAssessment,
+    Scene,
+    SpeakerSentimentAssessment,
+    TranscriptAssessment,
+    VideoPromptPlan,
+    VideoPromptPreclassification,
+)
 from content_creator.pipeline import VideoGenerationPipeline, wrap_transcription
 
 
@@ -14,6 +21,9 @@ class FakeGateway:
     def __init__(self, config: AppConfig):
         self.config = config
         self.generated_images: list[tuple[str, Path]] = []
+        self.diarization_calls: list[
+            tuple[int | None, int | None, int | None, float | None]
+        ] = []
 
     def synthesize_speech(self, text: str, destination: Path) -> Path:
         destination.write_bytes(b"audio")
@@ -22,7 +32,18 @@ class FakeGateway:
     def transcribe_audio(self, audio_path: Path) -> str:
         return f"transcribed {audio_path.stem}"
 
-    def transcribe_audio_with_speakers(self, audio_path: Path) -> str:
+    def transcribe_audio_with_speakers(
+        self,
+        audio_path: Path,
+        *,
+        speaker_count: int | None = None,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
+        speaker_dominance_threshold: float | None = None,
+    ) -> str:
+        self.diarization_calls.append(
+            (speaker_count, min_speakers, max_speakers, speaker_dominance_threshold)
+        )
         return f"SPEAKER_00: transcribed {audio_path.stem}"
 
     def classify_content_safety(
@@ -67,7 +88,45 @@ class FakePlanner:
         return VideoPromptPlan(
             video_prompt="Generated visual direction",
             preclassification=VideoPromptPreclassification(
-                mood="Hopeful", has_foul_language=False, word_count=12, sentence_count=2
+                mood="Hopeful",
+                has_foul_language=False,
+                word_count=12,
+                sentence_count=2,
+                truthfulness_assessment=TranscriptAssessment(
+                    label="MixedOrUnverifiable",
+                    confidence_score=0.58,
+                    reason="The narration makes general claims without evidence that can be checked from the transcript alone.",
+                ),
+                interaction_style_assessment=InteractionStyleAssessment(
+                    formality=TranscriptAssessment(
+                        label="Mixed",
+                        confidence_score=0.72,
+                        reason="The narration blends conversational language with some structured phrasing.",
+                    ),
+                    certainty_hedging=TranscriptAssessment(
+                        label="Balanced",
+                        confidence_score=0.63,
+                        reason="The wording shows some confidence without sounding absolute.",
+                    ),
+                    persuasion_intent=TranscriptAssessment(
+                        label="LowOrNone",
+                        confidence_score=0.79,
+                        reason="The transcript mainly informs rather than persuades.",
+                    ),
+                    claim_density=TranscriptAssessment(
+                        label="Medium",
+                        confidence_score=0.54,
+                        reason="The narration contains some claims but also descriptive filler.",
+                    ),
+                    speaker_sentiment=[
+                        SpeakerSentimentAssessment(
+                            speaker="Unknown",
+                            sentiment="Neutral",
+                            confidence_score=0.46,
+                            reason="The tone is mostly even and descriptive.",
+                        )
+                    ],
+                ),
             ),
         )
 
@@ -260,6 +319,41 @@ def test_generate_from_text_can_generate_video_prompt(
         "has_foul_language": False,
         "word_count": 12,
         "sentence_count": 2,
+        "truthfulness_assessment": {
+            "label": "MixedOrUnverifiable",
+            "confidence_score": 0.58,
+            "reason": "The narration makes general claims without evidence that can be checked from the transcript alone.",
+        },
+        "interaction_style_assessment": {
+            "formality": {
+                "label": "Mixed",
+                "confidence_score": 0.72,
+                "reason": "The narration blends conversational language with some structured phrasing.",
+            },
+            "certainty_hedging": {
+                "label": "Balanced",
+                "confidence_score": 0.63,
+                "reason": "The wording shows some confidence without sounding absolute.",
+            },
+            "persuasion_intent": {
+                "label": "LowOrNone",
+                "confidence_score": 0.79,
+                "reason": "The transcript mainly informs rather than persuades.",
+            },
+            "claim_density": {
+                "label": "Medium",
+                "confidence_score": 0.54,
+                "reason": "The narration contains some claims but also descriptive filler.",
+            },
+            "speaker_sentiment": [
+                {
+                    "speaker": "Unknown",
+                    "sentiment": "Neutral",
+                    "confidence_score": 0.46,
+                    "reason": "The tone is mostly even and descriptive.",
+                }
+            ],
+        },
     }
 
 
@@ -336,6 +430,29 @@ def test_transcribe_audio_file_preserves_speaker_labels_full_file(
 
     assert text == "SPEAKER_00: transcribed dialog"
     assert "🧩 Transcribing audio with speaker diarization (full file)" in statuses
+
+
+def test_transcribe_audio_file_forwards_diarization_speaker_constraints(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+
+    pipeline = VideoGenerationPipeline(_config(tmp_path))
+    audio_path = tmp_path / "dialog.wav"
+    audio_path.write_bytes(b"audio")
+
+    pipeline.transcribe_audio_file(
+        audio_path=audio_path,
+        preserve_speaker=True,
+        chunk_seconds=0,
+        diarization_speaker_count=1,
+    )
+
+    assert pipeline._gateway.diarization_calls == [(1, None, None, 0.9)]
 
 
 def test_transcribe_audio_file_filters_flagged_chunks_when_enabled(

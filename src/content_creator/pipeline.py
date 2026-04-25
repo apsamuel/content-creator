@@ -60,6 +60,7 @@ class VideoGenerationPipeline:
         output_path: Path,
         generate_video_prompt: bool = False,
         image_workers: int = 1,
+        view_preclassification: bool = False,
     ) -> Path:
         self._ensure_video_dependencies()
         run_dir = self._prepare_run_dir(output_path)
@@ -95,6 +96,7 @@ class VideoGenerationPipeline:
             run_dir=run_dir,
             manifest=manifest,
             image_workers=image_workers,
+            view_preclassification=view_preclassification,
         )
 
     def generate_from_audio(
@@ -106,12 +108,17 @@ class VideoGenerationPipeline:
         chunk_seconds: float = 45.0,
         generate_video_prompt: bool = False,
         preserve_speaker: bool = False,
+        diarization_speaker_count: int | None = None,
+        diarization_min_speakers: int | None = None,
+        diarization_max_speakers: int | None = None,
+        speaker_dominance_threshold: float = 0.9,
         content_safety_enabled: bool = False,
         content_safety_filter: bool = False,
         content_safety_threshold: float = 0.7,
         content_safety_model: str | None = None,
         transcribe_workers: int = 1,
         image_workers: int = 1,
+        view_preclassification: bool = False,
     ) -> Path:
         self._ensure_video_dependencies()
         run_dir = self._prepare_run_dir(output_path)
@@ -124,6 +131,10 @@ class VideoGenerationPipeline:
             "audio": str(audio_path),
             "chunk_seconds": chunk_seconds,
             "preserve_speaker": preserve_speaker,
+            "diarization_speaker_count": diarization_speaker_count,
+            "diarization_min_speakers": diarization_min_speakers,
+            "diarization_max_speakers": diarization_max_speakers,
+            "speaker_dominance_threshold": speaker_dominance_threshold,
             "content_safety_enabled": content_safety_enabled,
             "content_safety_filter": content_safety_filter,
             "content_safety_threshold": content_safety_threshold,
@@ -139,6 +150,10 @@ class VideoGenerationPipeline:
             chunk_seconds=chunk_seconds,
             chunk_dir_root=run_dir / "stt_chunks",
             preserve_speaker=preserve_speaker,
+            diarization_speaker_count=diarization_speaker_count,
+            diarization_min_speakers=diarization_min_speakers,
+            diarization_max_speakers=diarization_max_speakers,
+            speaker_dominance_threshold=speaker_dominance_threshold,
             content_safety_enabled=content_safety_enabled,
             content_safety_filter=content_safety_filter,
             content_safety_threshold=content_safety_threshold,
@@ -169,6 +184,7 @@ class VideoGenerationPipeline:
             run_dir=run_dir,
             manifest=manifest,
             image_workers=image_workers,
+            view_preclassification=view_preclassification,
         )
 
     def transcribe_audio_file(
@@ -178,6 +194,10 @@ class VideoGenerationPipeline:
         output_path: Path | None = None,
         chunk_seconds: float = 45.0,
         preserve_speaker: bool = False,
+        diarization_speaker_count: int | None = None,
+        diarization_min_speakers: int | None = None,
+        diarization_max_speakers: int | None = None,
+        speaker_dominance_threshold: float = 0.9,
         content_safety_enabled: bool = False,
         content_safety_filter: bool = False,
         content_safety_threshold: float = 0.7,
@@ -189,6 +209,10 @@ class VideoGenerationPipeline:
             chunk_seconds=chunk_seconds,
             chunk_dir_root=self._config.work_dir / "transcribe_chunks",
             preserve_speaker=preserve_speaker,
+            diarization_speaker_count=diarization_speaker_count,
+            diarization_min_speakers=diarization_min_speakers,
+            diarization_max_speakers=diarization_max_speakers,
+            speaker_dominance_threshold=speaker_dominance_threshold,
             content_safety_enabled=content_safety_enabled,
             content_safety_filter=content_safety_filter,
             content_safety_threshold=content_safety_threshold,
@@ -215,6 +239,7 @@ class VideoGenerationPipeline:
         run_dir: Path,
         manifest: dict[str, object] | None = None,
         image_workers: int = 1,
+        view_preclassification: bool = False,
     ) -> Path:
         if manifest is None:
             manifest = {
@@ -242,10 +267,54 @@ class VideoGenerationPipeline:
                 "has_foul_language": video_prompt_plan.preclassification.has_foul_language,
                 "word_count": video_prompt_plan.preclassification.word_count,
                 "sentence_count": video_prompt_plan.preclassification.sentence_count,
+                "truthfulness_assessment": {
+                    "label": video_prompt_plan.preclassification.truthfulness_assessment.label,
+                    "confidence_score": video_prompt_plan.preclassification.truthfulness_assessment.confidence_score,
+                    "reason": video_prompt_plan.preclassification.truthfulness_assessment.reason,
+                },
+                "interaction_style_assessment": {
+                    "formality": {
+                        "label": video_prompt_plan.preclassification.interaction_style_assessment.formality.label,
+                        "confidence_score": video_prompt_plan.preclassification.interaction_style_assessment.formality.confidence_score,
+                        "reason": video_prompt_plan.preclassification.interaction_style_assessment.formality.reason,
+                    },
+                    "certainty_hedging": {
+                        "label": video_prompt_plan.preclassification.interaction_style_assessment.certainty_hedging.label,
+                        "confidence_score": video_prompt_plan.preclassification.interaction_style_assessment.certainty_hedging.confidence_score,
+                        "reason": video_prompt_plan.preclassification.interaction_style_assessment.certainty_hedging.reason,
+                    },
+                    "persuasion_intent": {
+                        "label": video_prompt_plan.preclassification.interaction_style_assessment.persuasion_intent.label,
+                        "confidence_score": video_prompt_plan.preclassification.interaction_style_assessment.persuasion_intent.confidence_score,
+                        "reason": video_prompt_plan.preclassification.interaction_style_assessment.persuasion_intent.reason,
+                    },
+                    "claim_density": {
+                        "label": video_prompt_plan.preclassification.interaction_style_assessment.claim_density.label,
+                        "confidence_score": video_prompt_plan.preclassification.interaction_style_assessment.claim_density.confidence_score,
+                        "reason": video_prompt_plan.preclassification.interaction_style_assessment.claim_density.reason,
+                    },
+                    "speaker_sentiment": [
+                        {
+                            "speaker": item.speaker,
+                            "sentiment": item.sentiment,
+                            "confidence_score": item.confidence_score,
+                            "reason": item.reason,
+                        }
+                        for item in video_prompt_plan.preclassification.interaction_style_assessment.speaker_sentiment
+                    ],
+                },
             }
             if video_prompt_plan.preclassification is not None
             else None
         )
+        if (
+            view_preclassification
+            and manifest.get("video_prompt_preclassification") is not None
+        ):
+            self._status(
+                "🔍 Pre-classification:\n"
+                + json.dumps(manifest["video_prompt_preclassification"], indent=2)
+            )
         manifest["status"] = "planning_scenes"
         self._write_manifest(run_dir, manifest)
         self._status("🧠 Planning scenes from narration")
@@ -385,6 +454,10 @@ class VideoGenerationPipeline:
         chunk_seconds: float,
         chunk_dir_root: Path,
         preserve_speaker: bool,
+        diarization_speaker_count: int | None,
+        diarization_min_speakers: int | None,
+        diarization_max_speakers: int | None,
+        speaker_dominance_threshold: float,
         content_safety_enabled: bool,
         content_safety_filter: bool,
         content_safety_threshold: float,
@@ -411,7 +484,13 @@ class VideoGenerationPipeline:
                 self._status(
                     "🧩 Transcribing audio with speaker diarization (full file)"
                 )
-                transcript = self._gateway.transcribe_audio_with_speakers(audio_path)
+                transcript = self._gateway.transcribe_audio_with_speakers(
+                    audio_path,
+                    speaker_count=diarization_speaker_count,
+                    min_speakers=diarization_min_speakers,
+                    max_speakers=diarization_max_speakers,
+                    speaker_dominance_threshold=speaker_dominance_threshold,
+                )
             else:
                 self._status("📝 Transcribing audio with speech-to-text model")
                 transcript = self._gateway.transcribe_audio(audio_path)
@@ -445,7 +524,13 @@ class VideoGenerationPipeline:
                 self._status(
                     "🧩 Transcribing audio with speaker diarization (full file)"
                 )
-                transcript = self._gateway.transcribe_audio_with_speakers(audio_path)
+                transcript = self._gateway.transcribe_audio_with_speakers(
+                    audio_path,
+                    speaker_count=diarization_speaker_count,
+                    min_speakers=diarization_min_speakers,
+                    max_speakers=diarization_max_speakers,
+                    speaker_dominance_threshold=speaker_dominance_threshold,
+                )
                 if content_safety_enabled:
                     if report is not None:
                         report["full_audio"] = self._evaluate_content_safety(
@@ -481,7 +566,13 @@ class VideoGenerationPipeline:
                     f"  Chunk {chunk_idx}/{len(chunks)}: diarizing and transcribing"
                 )
                 chunk_start = perf_counter()
-                text = self._gateway.transcribe_audio_with_speakers(chunk_path)
+                text = self._gateway.transcribe_audio_with_speakers(
+                    chunk_path,
+                    speaker_count=diarization_speaker_count,
+                    min_speakers=diarization_min_speakers,
+                    max_speakers=diarization_max_speakers,
+                    speaker_dominance_threshold=speaker_dominance_threshold,
+                )
                 elapsed = perf_counter() - chunk_start
                 self._emit_progress(
                     "Diarization chunk progress",

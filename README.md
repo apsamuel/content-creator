@@ -180,7 +180,63 @@ Each run writes intermediate assets to the configured work directory:
 - generated narration or the referenced audio track
 - per-scene images
 - temporary scene clips
-- `manifest.json` with prompts, transcript text, and scene durations
+- `manifest.json` with prompts, transcript text, scene durations, and video-prompt preclassification metadata
+
+Example `video_prompt_preclassification` block written to `manifest.json`:
+
+```json
+{
+  "video_prompt_preclassification": {
+    "mood": "informative",
+    "has_foul_language": false,
+    "word_count": 312,
+    "sentence_count": 18,
+    "truthfulness_assessment": {
+      "label": "MostlyFactual",
+      "confidence_score": 0.82,
+      "reason": "Content contains verifiable technical claims with no apparent exaggeration."
+    },
+    "interaction_style_assessment": {
+      "formality": {
+        "label": "Mixed",
+        "confidence_score": 0.75,
+        "reason": "Speaker alternates between structured explanations and conversational asides."
+      },
+      "certainty_hedging": {
+        "label": "Balanced",
+        "confidence_score": 0.7,
+        "reason": "Some hedging phrases like 'I think' and 'probably' appear, but most claims are direct."
+      },
+      "persuasion_intent": {
+        "label": "Moderate",
+        "confidence_score": 0.65,
+        "reason": "Occasional calls to action and framing of benefits suggest light persuasion."
+      },
+      "claim_density": {
+        "label": "Medium",
+        "confidence_score": 0.78,
+        "reason": "Several factual assertions per paragraph without overwhelming the listener."
+      },
+      "speaker_sentiment": [
+        {
+          "speaker": "SPEAKER_00",
+          "sentiment": "Neutral",
+          "confidence_score": 0.85,
+          "reason": "Measured, even tone throughout with no strong emotional peaks."
+        },
+        {
+          "speaker": "SPEAKER_01",
+          "sentiment": "Positive",
+          "confidence_score": 0.79,
+          "reason": "Enthusiastic phrasing and positive framing detected in most segments."
+        }
+      ]
+    }
+  }
+}
+```
+
+Use `--view-preclassification` on `from-text` or `from-audio` to print this block to the terminal immediately after the LLM analysis completes, without waiting for the full video render.
 
 ## Notes
 

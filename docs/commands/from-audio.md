@@ -30,6 +30,10 @@ Use `from-audio` when you already have narration audio and want matching visuals
 - Optional:
   - `--chunk-seconds FLOAT` (default `45.0`; set to `0` to disable chunking)
   - `--preserve-speaker / --no-preserve-speaker` (default `--no-preserve-speaker`)
+  - `--speaker-count INTEGER` (force diarization to an exact speaker count)
+  - `--min-speakers INTEGER` (minimum speaker count bound for diarization)
+  - `--max-speakers INTEGER` (maximum speaker count bound for diarization)
+  - `--speaker-dominance-threshold FLOAT` (default `HF_SPEAKER_DOMINANCE_THRESHOLD` or `0.9`; only used when auto-collapse is active)
   - `--content-safety / --no-content-safety` (default `--no-content-safety`)
   - `--content-safety-filter / --no-content-safety-filter` (default `--no-content-safety-filter`)
   - `--content-safety-threshold FLOAT` (default `0.7`)
@@ -40,7 +44,10 @@ Use `from-audio` when you already have narration audio and want matching visuals
 
 - Default mode uses STT with optional chunking (`--chunk-seconds`).
 - If `--preserve-speaker` is enabled, diarization is used so transcript lines are speaker-labeled.
+- In speaker mode, if one speaker dominates ~90%+ of diarized duration, sparse secondary labels are automatically collapsed into the primary speaker.
 - Speaker-preserving mode requires diarization dependencies and model access.
+- Explicit speaker constraints (`--speaker-count` or `--min-speakers/--max-speakers`) disable automatic dominant-speaker collapse.
+- `--speaker-dominance-threshold` (or `HF_SPEAKER_DOMINANCE_THRESHOLD`) controls when automatic collapse triggers.
 - If `--content-safety` is enabled, transcript text is labeled for unsafe content.
 - If `--content-safety-filter` is also enabled, flagged chunks are dropped before scene planning.
 
@@ -100,8 +107,10 @@ content-creator from-audio \
   --audio-file ./assets/interview.wav \
   --generate-video-prompt \
   --preserve-speaker \
+  --speaker-count 1 \
   --chunk-seconds 0 \
   --output ./output/interview.mp4
+```
 
 Moderate and filter transcript chunks before planning scenes:
 
@@ -115,7 +124,6 @@ content-creator from-audio \
   --content-safety-threshold 0.8 \
   --content-safety-model unitary/toxic-bert \
   --output ./output/filtered.mp4
-```
 ```
 
 ## Failure Modes to Expect

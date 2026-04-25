@@ -10,7 +10,8 @@ This command is focused on transcript generation:
 2. Transcribes with STT.
 3. Optionally applies chunked STT for long audio.
 4. Optionally preserves speaker labels using diarization.
-5. Writes transcript to a file or prints to stdout.
+5. In speaker mode, if one speaker dominates ~90%+ of diarized duration, sparse secondary labels are automatically collapsed into the primary speaker.
+6. Writes transcript to a file or prints to stdout.
 
 ## When to use it
 
@@ -24,6 +25,10 @@ Use `transcribe` when you only need transcript output, such as preparing script 
   - `--output FILE` (if omitted, transcript prints to terminal)
   - `--chunk-seconds FLOAT` (default `45.0`; set to `0` to disable chunking)
   - `--preserve-speaker / --no-preserve-speaker` (default `--no-preserve-speaker`)
+  - `--speaker-count INTEGER` (force diarization to an exact speaker count)
+  - `--min-speakers INTEGER` (minimum speaker count bound for diarization)
+  - `--max-speakers INTEGER` (maximum speaker count bound for diarization)
+  - `--speaker-dominance-threshold FLOAT` (default `HF_SPEAKER_DOMINANCE_THRESHOLD` or `0.9`; only used when auto-collapse is active)
   - `--content-safety / --no-content-safety` (default `--no-content-safety`)
   - `--content-safety-filter / --no-content-safety-filter` (default `--no-content-safety-filter`)
   - `--content-safety-threshold FLOAT` (default `0.7`)
@@ -36,6 +41,8 @@ Use `transcribe` when you only need transcript output, such as preparing script 
 - Without `--output`, transcript text is emitted directly to stdout.
 - With `--content-safety`, moderation labels are calculated for transcript text.
 - With both `--content-safety` and `--content-safety-filter`, flagged chunks are removed from output.
+- Explicit speaker constraints (`--speaker-count` or `--min-speakers/--max-speakers`) disable automatic dominant-speaker collapse.
+- `--speaker-dominance-threshold` (or `HF_SPEAKER_DOMINANCE_THRESHOLD`) controls when automatic collapse triggers.
 
 ## Mechanism Flow
 
@@ -80,6 +87,17 @@ content-creator transcribe \
   --audio-file ./assets/interview.wav \
   --preserve-speaker \
   --output ./output/interview-speakers.txt
+```
+
+Bias diarization toward a single speaker:
+
+```bash
+content-creator transcribe \
+  --audio-file ./assets/interview.wav \
+  --preserve-speaker \
+  --speaker-count 1 \
+  --output ./output/interview-single-speaker.txt
+```
 
 Moderate and filter chunked transcript text:
 
@@ -92,7 +110,6 @@ content-creator transcribe \
   --content-safety-threshold 0.8 \
   --content-safety-model unitary/toxic-bert \
   --output ./output/meeting-safe.txt
-```
 ```
 
 ## Failure Modes to Expect

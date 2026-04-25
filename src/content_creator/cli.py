@@ -136,6 +136,50 @@ def _resolve_worker_count(
     return resolved
 
 
+def _resolve_diarization_speaker_options(
+    *, speaker_count: int | None, min_speakers: int | None, max_speakers: int | None
+) -> tuple[int | None, int | None, int | None]:
+    if speaker_count is not None and (
+        min_speakers is not None or max_speakers is not None
+    ):
+        raise click.ClickException(
+            "--speaker-count cannot be used with --min-speakers/--max-speakers"
+        )
+    if (
+        min_speakers is not None
+        and max_speakers is not None
+        and min_speakers > max_speakers
+    ):
+        raise click.ClickException(
+            "--min-speakers cannot be greater than --max-speakers"
+        )
+    return speaker_count, min_speakers, max_speakers
+
+
+def _resolve_speaker_dominance_threshold(value: float | None) -> float:
+    if value is not None:
+        return value
+
+    raw_value = os.getenv("HF_SPEAKER_DOMINANCE_THRESHOLD", "").strip()
+    if not raw_value:
+        return 0.9
+
+    try:
+        resolved = float(raw_value)
+    except ValueError as exc:
+        raise click.ClickException(
+            "--speaker-dominance-threshold must be between 0.0 and 1.0 "
+            "(from HF_SPEAKER_DOMINANCE_THRESHOLD)"
+        ) from exc
+
+    if resolved < 0.0 or resolved > 1.0:
+        raise click.ClickException(
+            "--speaker-dominance-threshold must be between 0.0 and 1.0 "
+            "(from HF_SPEAKER_DOMINANCE_THRESHOLD)"
+        )
+    return resolved
+
+
 @click.group()
 @click.option(
     "--debug/--no-debug",
@@ -223,6 +267,12 @@ def cli(
     help="Number of worker threads for scene image generation (default: HF_IMAGE_WORKERS or 1).",
 )
 @click.option("--work-dir", default=None, help="Directory for intermediate assets.")
+@click.option(
+    "--view-preclassification/--no-view-preclassification",
+    default=False,
+    show_default=True,
+    help="Print the pre-classification analysis to the terminal after LLM analysis.",
+)
 @click.pass_context
 def from_text(
     ctx: click.Context,
@@ -232,6 +282,7 @@ def from_text(
     output_path: Path,
     image_workers: int | None,
     work_dir: str | None,
+    view_preclassification: bool,
 ) -> None:
     """Generate narration with TTS and create a matching AI video."""
 
@@ -264,6 +315,7 @@ def from_text(
             generate_video_prompt=generate_video_prompt,
             output_path=output_path,
             image_workers=resolved_image_workers,
+            view_preclassification=view_preclassification,
         )
         click.echo(f"✅ Video written to {result}")
 
@@ -321,6 +373,37 @@ def from_text(
     help="Use speaker diarization so transcript text is labeled by speaker.",
 )
 @click.option(
+    "--speaker-count",
+    default=None,
+    show_default=False,
+    type=click.IntRange(1, None),
+    help="Force diarization to a fixed number of speakers (mutually exclusive with min/max).",
+)
+@click.option(
+    "--min-speakers",
+    default=None,
+    show_default=False,
+    type=click.IntRange(1, None),
+    help="Set minimum speaker count bound for diarization.",
+)
+@click.option(
+    "--max-speakers",
+    default=None,
+    show_default=False,
+    type=click.IntRange(1, None),
+    help="Set maximum speaker count bound for diarization.",
+)
+@click.option(
+    "--speaker-dominance-threshold",
+    default=None,
+    show_default=False,
+    type=click.FloatRange(0.0, 1.0),
+    help=(
+        "Dominance threshold for auto-collapsing sparse secondary speakers "
+        "(default: HF_SPEAKER_DOMINANCE_THRESHOLD or 0.9)."
+    ),
+)
+@click.option(
     "--content-safety/--no-content-safety",
     default=False,
     show_default=True,
@@ -345,6 +428,12 @@ def from_text(
     help="Override Hugging Face moderation model (default: unitary/unbiased-toxic-roberta).",
 )
 @click.option("--work-dir", default=None, help="Directory for intermediate assets.")
+@click.option(
+    "--view-preclassification/--no-view-preclassification",
+    default=False,
+    show_default=True,
+    help="Print the pre-classification analysis to the terminal after LLM analysis.",
+)
 @click.pass_context
 def from_audio(
     ctx: click.Context,
@@ -356,11 +445,16 @@ def from_audio(
     chunk_seconds: float,
     transcribe_workers: int | None,
     preserve_speaker: bool,
+    speaker_count: int | None,
+    min_speakers: int | None,
+    max_speakers: int | None,
+    speaker_dominance_threshold: float | None,
     content_safety: bool,
     content_safety_filter: bool,
     content_safety_threshold: float,
     content_safety_model: str | None,
     work_dir: str | None,
+    view_preclassification: bool,
 ) -> None:
     """Transcribe supplied audio and generate a matching AI video track."""
 
@@ -377,6 +471,16 @@ def from_audio(
             transcribe_workers,
             env_var="HF_TRANSCRIBE_WORKERS",
             option_name="--transcribe-workers",
+        )
+        (resolved_speaker_count, resolved_min_speakers, resolved_max_speakers) = (
+            _resolve_diarization_speaker_options(
+                speaker_count=speaker_count,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
+            )
+        )
+        resolved_speaker_dominance_threshold = _resolve_speaker_dominance_threshold(
+            speaker_dominance_threshold
         )
         pipeline = _build_pipeline(
             work_dir=work_dir,
@@ -398,10 +502,15 @@ def from_audio(
             chunk_seconds=chunk_seconds,
             transcribe_workers=resolved_transcribe_workers,
             preserve_speaker=preserve_speaker,
+            diarization_speaker_count=resolved_speaker_count,
+            diarization_min_speakers=resolved_min_speakers,
+            diarization_max_speakers=resolved_max_speakers,
+            speaker_dominance_threshold=resolved_speaker_dominance_threshold,
             content_safety_enabled=content_safety,
             content_safety_filter=content_safety_filter,
             content_safety_threshold=content_safety_threshold,
             content_safety_model=content_safety_model,
+            view_preclassification=view_preclassification,
         )
         click.echo(f"✅ Video written to {result}")
 
@@ -442,6 +551,37 @@ def from_audio(
     help="Use speaker diarization so transcript text is labeled by speaker.",
 )
 @click.option(
+    "--speaker-count",
+    default=None,
+    show_default=False,
+    type=click.IntRange(1, None),
+    help="Force diarization to a fixed number of speakers (mutually exclusive with min/max).",
+)
+@click.option(
+    "--min-speakers",
+    default=None,
+    show_default=False,
+    type=click.IntRange(1, None),
+    help="Set minimum speaker count bound for diarization.",
+)
+@click.option(
+    "--max-speakers",
+    default=None,
+    show_default=False,
+    type=click.IntRange(1, None),
+    help="Set maximum speaker count bound for diarization.",
+)
+@click.option(
+    "--speaker-dominance-threshold",
+    default=None,
+    show_default=False,
+    type=click.FloatRange(0.0, 1.0),
+    help=(
+        "Dominance threshold for auto-collapsing sparse secondary speakers "
+        "(default: HF_SPEAKER_DOMINANCE_THRESHOLD or 0.9)."
+    ),
+)
+@click.option(
     "--content-safety/--no-content-safety",
     default=False,
     show_default=True,
@@ -474,6 +614,10 @@ def transcribe(
     chunk_seconds: float,
     transcribe_workers: int | None,
     preserve_speaker: bool,
+    speaker_count: int | None,
+    min_speakers: int | None,
+    max_speakers: int | None,
+    speaker_dominance_threshold: float | None,
     content_safety: bool,
     content_safety_filter: bool,
     content_safety_threshold: float,
@@ -487,6 +631,16 @@ def transcribe(
             transcribe_workers,
             env_var="HF_TRANSCRIBE_WORKERS",
             option_name="--transcribe-workers",
+        )
+        (resolved_speaker_count, resolved_min_speakers, resolved_max_speakers) = (
+            _resolve_diarization_speaker_options(
+                speaker_count=speaker_count,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
+            )
+        )
+        resolved_speaker_dominance_threshold = _resolve_speaker_dominance_threshold(
+            speaker_dominance_threshold
         )
         pipeline = _build_pipeline(
             work_dir=work_dir,
@@ -505,6 +659,10 @@ def transcribe(
             chunk_seconds=chunk_seconds,
             transcribe_workers=resolved_transcribe_workers,
             preserve_speaker=preserve_speaker,
+            diarization_speaker_count=resolved_speaker_count,
+            diarization_min_speakers=resolved_min_speakers,
+            diarization_max_speakers=resolved_max_speakers,
+            speaker_dominance_threshold=resolved_speaker_dominance_threshold,
             content_safety_enabled=content_safety,
             content_safety_filter=content_safety_filter,
             content_safety_threshold=content_safety_threshold,

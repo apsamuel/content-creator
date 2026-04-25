@@ -20,6 +20,32 @@ class VideoPromptPreclassification:
     has_foul_language: bool
     word_count: int
     sentence_count: int
+    truthfulness_assessment: "TranscriptAssessment"
+    interaction_style_assessment: "InteractionStyleAssessment"
+
+
+@dataclass(slots=True)
+class TranscriptAssessment:
+    label: str
+    confidence_score: float
+    reason: str
+
+
+@dataclass(slots=True)
+class SpeakerSentimentAssessment:
+    speaker: str
+    sentiment: str
+    confidence_score: float
+    reason: str
+
+
+@dataclass(slots=True)
+class InteractionStyleAssessment:
+    formality: TranscriptAssessment
+    certainty_hedging: TranscriptAssessment
+    persuasion_intent: TranscriptAssessment
+    claim_density: TranscriptAssessment
+    speaker_sentiment: list[SpeakerSentimentAssessment]
 
 
 @dataclass(slots=True)
@@ -41,6 +67,9 @@ class ScenePlanner:
         prompt = self._build_video_prompt_prompt(narration_text=narration_text)
         raw = self._llm.generate_text(prompt)
         payload = self._extract_json(raw)
+        truthfulness_assessment, interaction_style_assessment = self._classify_analysis(
+            narration_text=narration_text
+        )
 
         mood = self._normalize_mood(str(payload.get("mood", "")))
         has_foul_language = self._parse_yes_no(payload.get("has_foul_language"))
@@ -55,10 +84,71 @@ class ScenePlanner:
             has_foul_language=has_foul_language,
             word_count=self._count_words(narration_text),
             sentence_count=self._count_sentences(narration_text),
+            truthfulness_assessment=truthfulness_assessment,
+            interaction_style_assessment=interaction_style_assessment,
         )
         return VideoPromptPlan(
             video_prompt=prompt_text, preclassification=preclassification
         )
+
+    def _classify_analysis(
+        self, *, narration_text: str
+    ) -> tuple[TranscriptAssessment, InteractionStyleAssessment]:
+        prompt = self._build_analysis_prompt(narration_text=narration_text)
+        raw = self._llm.generate_text(prompt)
+        payload = self._extract_json(raw)
+
+        truthfulness_assessment = self._parse_dimension_assessment(
+            payload.get("truthfulness"),
+            allowed_labels={
+                "LikelyTruthful",
+                "MixedOrUnverifiable",
+                "LikelyMisleading",
+            },
+            fallback_reason=(
+                "Assessment is limited to signals present in the transcript and does "
+                "not verify external facts."
+            ),
+            default_label="MixedOrUnverifiable",
+        )
+        interaction_style_assessment = InteractionStyleAssessment(
+            formality=self._parse_dimension_assessment(
+                payload.get("formality"),
+                allowed_labels={"Formal", "Mixed", "Informal"},
+                fallback_reason=(
+                    "Formality is estimated from wording and structure present in the transcript only."
+                ),
+                default_label="Mixed",
+            ),
+            certainty_hedging=self._parse_dimension_assessment(
+                payload.get("certainty_hedging"),
+                allowed_labels={"Confident", "Balanced", "HeavilyHedged"},
+                fallback_reason=(
+                    "Certainty and hedging are estimated from the transcript's phrasing only."
+                ),
+                default_label="Balanced",
+            ),
+            persuasion_intent=self._parse_dimension_assessment(
+                payload.get("persuasion_intent"),
+                allowed_labels={"Strong", "Moderate", "LowOrNone"},
+                fallback_reason=(
+                    "Persuasion intent is estimated from rhetorical cues in the transcript only."
+                ),
+                default_label="LowOrNone",
+            ),
+            claim_density=self._parse_dimension_assessment(
+                payload.get("claim_density"),
+                allowed_labels={"High", "Medium", "Low"},
+                fallback_reason=(
+                    "Claim density is estimated from the concentration of factual or assertive statements in the transcript only."
+                ),
+                default_label="Medium",
+            ),
+            speaker_sentiment=self._parse_speaker_sentiment_assessments(
+                payload.get("speaker_sentiment")
+            ),
+        )
+        return truthfulness_assessment, interaction_style_assessment
 
     def build_scenes(
         self,
@@ -182,6 +272,39 @@ Narration or transcript:
 {narration_text}
 """.strip()
 
+    def _build_analysis_prompt(self, *, narration_text: str) -> str:
+        return f"""
+You analyze the truthfulness and interaction style of a transcript.
+
+Return valid JSON only with this exact schema:
+{{
+    "truthfulness": {{"label": "LikelyTruthful|MixedOrUnverifiable|LikelyMisleading", "confidence_score": 0.0, "reason": "short explanation"}},
+    "formality": {{"label": "Formal|Mixed|Informal", "confidence_score": 0.0, "reason": "short explanation"}},
+    "certainty_hedging": {{"label": "Confident|Balanced|HeavilyHedged", "confidence_score": 0.0, "reason": "short explanation"}},
+    "persuasion_intent": {{"label": "Strong|Moderate|LowOrNone", "confidence_score": 0.0, "reason": "short explanation"}},
+    "claim_density": {{"label": "High|Medium|Low", "confidence_score": 0.0, "reason": "short explanation"}},
+    "speaker_sentiment": [{{"speaker": "speaker identifier", "sentiment": "Positive|Negative|Neutral|Mixed", "confidence_score": 0.0, "reason": "short explanation"}}]
+}}
+
+Truthfulness constraints:
+- Base the answer only on the transcript itself. Do not assume access to external facts.
+- Use LikelyTruthful when the transcript is internally consistent, cautious, and avoids unsupported certainty.
+- Use MixedOrUnverifiable when claims cannot be checked from the transcript or contain a mix of grounded and ungrounded statements.
+- Use LikelyMisleading when the transcript contains strong unsupported certainty, internal contradictions, or obvious rhetorical manipulation.
+
+Interaction style constraints:
+- Base the answer only on the transcript itself.
+- Keep each reason to one sentence.
+- If speakers are explicitly labeled, preserve those labels.
+- If speakers are not labeled, return one item with speaker set to Unknown.
+
+General constraints:
+- confidence_score values must be between 0 and 1.
+
+Transcript:
+{narration_text}
+""".strip()
+
     def _fallback_video_prompt(self, narration_text: str) -> str:
         snippet = self._normalize_fragment(narration_text)
         if len(snippet) > 220:
@@ -220,11 +343,99 @@ Narration or transcript:
         normalized = self._normalize_fragment(value)
         return normalized or "Neutral"
 
+    def _normalize_assessment_label(self, value: str) -> str:
+        normalized = self._normalize_fragment(value)
+        allowed = {"LikelyTruthful", "MixedOrUnverifiable", "LikelyMisleading"}
+        return normalized if normalized in allowed else "MixedOrUnverifiable"
+
+    def _normalize_allowed_label(
+        self, value: str, *, allowed_labels: set[str], default_label: str
+    ) -> str:
+        normalized = self._normalize_fragment(value)
+        return normalized if normalized in allowed_labels else default_label
+
     def _parse_yes_no(self, value: Any) -> bool:
         if isinstance(value, bool):
             return value
         normalized = self._normalize_fragment(str(value)).lower()
         return normalized in {"yes", "true", "1"}
+
+    def _parse_confidence_score(self, value: Any) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, min(1.0, parsed))
+
+    def _parse_dimension_assessment(
+        self,
+        value: Any,
+        *,
+        allowed_labels: set[str],
+        fallback_reason: str,
+        default_label: str,
+    ) -> TranscriptAssessment:
+        if not isinstance(value, dict):
+            return TranscriptAssessment(
+                label=default_label, confidence_score=0.0, reason=fallback_reason
+            )
+        reason = self._normalize_fragment(str(value.get("reason", "")))
+        if not reason:
+            reason = fallback_reason
+        return TranscriptAssessment(
+            label=self._normalize_allowed_label(
+                str(value.get("label", "")),
+                allowed_labels=allowed_labels,
+                default_label=default_label,
+            ),
+            confidence_score=self._parse_confidence_score(
+                value.get("confidence_score")
+            ),
+            reason=reason,
+        )
+
+    def _parse_speaker_sentiment_assessments(
+        self, value: Any
+    ) -> list[SpeakerSentimentAssessment]:
+        if not isinstance(value, list):
+            value = []
+
+        sentiments: list[SpeakerSentimentAssessment] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            speaker = self._normalize_fragment(str(item.get("speaker", "")))
+            if not speaker:
+                speaker = "Unknown"
+            reason = self._normalize_fragment(str(item.get("reason", "")))
+            if not reason:
+                reason = "Sentiment is estimated from the speaker's wording in the transcript only."
+            sentiments.append(
+                SpeakerSentimentAssessment(
+                    speaker=speaker,
+                    sentiment=self._normalize_allowed_label(
+                        str(item.get("sentiment", "")),
+                        allowed_labels={"Positive", "Negative", "Neutral", "Mixed"},
+                        default_label="Neutral",
+                    ),
+                    confidence_score=self._parse_confidence_score(
+                        item.get("confidence_score")
+                    ),
+                    reason=reason,
+                )
+            )
+
+        if sentiments:
+            return sentiments
+
+        return [
+            SpeakerSentimentAssessment(
+                speaker="Unknown",
+                sentiment="Neutral",
+                confidence_score=0.0,
+                reason="Sentiment is estimated from the transcript only and no speaker-specific structure was available.",
+            )
+        ]
 
     def _count_words(self, text: str) -> int:
         return len(re.findall(r"\b\w+\b", text))

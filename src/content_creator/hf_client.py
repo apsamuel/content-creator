@@ -118,7 +118,15 @@ class HuggingFaceGateway:
             "labels": normalized,
         }
 
-    def transcribe_audio_with_speakers(self, audio_path: Path) -> str:
+    def transcribe_audio_with_speakers(
+        self,
+        audio_path: Path,
+        *,
+        speaker_count: int | None = None,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
+        speaker_dominance_threshold: float | None = None,
+    ) -> str:
         if shutil.which("ffmpeg") is None:
             raise RuntimeError(
                 "--preserve-speaker requires ffmpeg to extract diarized audio segments"
@@ -176,7 +184,28 @@ class HuggingFaceGateway:
                 diarizer = PyannotePipeline.from_pretrained(
                     diarization_model, use_auth_token=self._config.hf_token
                 )
-                diarization = diarizer(str(prepared_audio_path))
+                if speaker_count is not None and speaker_count < 1:
+                    raise ValueError("speaker_count must be >= 1")
+                if min_speakers is not None and min_speakers < 1:
+                    raise ValueError("min_speakers must be >= 1")
+                if max_speakers is not None and max_speakers < 1:
+                    raise ValueError("max_speakers must be >= 1")
+                if (
+                    min_speakers is not None
+                    and max_speakers is not None
+                    and min_speakers > max_speakers
+                ):
+                    raise ValueError("min_speakers cannot be greater than max_speakers")
+
+                diarization_kwargs: dict[str, int] = {}
+                if speaker_count is not None:
+                    diarization_kwargs["num_speakers"] = speaker_count
+                if min_speakers is not None:
+                    diarization_kwargs["min_speakers"] = min_speakers
+                if max_speakers is not None:
+                    diarization_kwargs["max_speakers"] = max_speakers
+
+                diarization = diarizer(str(prepared_audio_path), **diarization_kwargs)
                 print("✅ Speaker diarization complete")
             except Exception as exc:
                 message = str(exc)
@@ -189,7 +218,7 @@ class HuggingFaceGateway:
                     ) from exc
                 raise
 
-            utterances: list[tuple[str, str]] = []
+            utterances: list[tuple[str, str, float]] = []
             for index, (segment, _, speaker) in enumerate(
                 diarization.itertracks(yield_label=True), start=1
             ):
@@ -224,12 +253,78 @@ class HuggingFaceGateway:
 
                 text = self.transcribe_audio(chunk_path).strip()
                 if text:
-                    utterances.append((str(speaker), text))
+                    utterances.append((str(speaker), text, end_time - start_time))
 
-        lines = self._merge_speaker_utterances(utterances)
+        resolved_speaker_dominance_threshold = (
+            self._resolve_speaker_dominance_threshold(speaker_dominance_threshold)
+        )
+
+        should_auto_collapse_primary = (
+            speaker_count is None and min_speakers is None and max_speakers is None
+        )
+        if should_auto_collapse_primary:
+            merge_inputs = self._collapse_to_primary_speaker(
+                utterances, dominance_threshold=resolved_speaker_dominance_threshold
+            )
+        else:
+            merge_inputs = [(speaker, text) for speaker, text, _ in utterances]
+
+        lines = self._merge_speaker_utterances(merge_inputs)
         if not lines:
             return self.transcribe_audio(audio_path)
         return "\n".join(lines).strip()
+
+    def _collapse_to_primary_speaker(
+        self, utterances: list[tuple[str, str, float]], *, dominance_threshold: float
+    ) -> list[tuple[str, str]]:
+        if not utterances:
+            return []
+
+        speaker_durations: dict[str, float] = {}
+        total_duration = 0.0
+        for speaker, _, duration in utterances:
+            safe_duration = max(0.0, float(duration))
+            speaker_durations[speaker] = (
+                speaker_durations.get(speaker, 0.0) + safe_duration
+            )
+            total_duration += safe_duration
+
+        if total_duration <= 0.0:
+            return [(speaker, text) for speaker, text, _ in utterances]
+
+        primary_speaker, primary_duration = max(
+            speaker_durations.items(), key=lambda item: item[1]
+        )
+        dominance = primary_duration / total_duration
+
+        if len(speaker_durations) == 1 or dominance < dominance_threshold:
+            return [(speaker, text) for speaker, text, _ in utterances]
+        return [(primary_speaker, text) for _, text, _ in utterances]
+
+    def _resolve_speaker_dominance_threshold(self, value: float | None) -> float:
+        if value is not None:
+            if value < 0.0 or value > 1.0:
+                raise ValueError(
+                    "speaker_dominance_threshold must be between 0.0 and 1.0"
+                )
+            return value
+
+        raw_value = os.getenv("HF_SPEAKER_DOMINANCE_THRESHOLD", "").strip()
+        if not raw_value:
+            return 0.9
+
+        try:
+            resolved = float(raw_value)
+        except ValueError as exc:
+            raise ValueError(
+                "HF_SPEAKER_DOMINANCE_THRESHOLD must be a float between 0.0 and 1.0"
+            ) from exc
+
+        if resolved < 0.0 or resolved > 1.0:
+            raise ValueError(
+                "HF_SPEAKER_DOMINANCE_THRESHOLD must be a float between 0.0 and 1.0"
+            )
+        return resolved
 
     def _merge_speaker_utterances(self, utterances: list[tuple[str, str]]) -> list[str]:
         merged: list[list[str]] = []

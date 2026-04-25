@@ -6,13 +6,18 @@ from content_creator.planner import ScenePlanner
 
 
 class StubLLM:
-    def __init__(self, response: str):
-        self.response = response
+    def __init__(self, response: str | list[str]):
+        if isinstance(response, list):
+            self.responses = response
+        else:
+            self.responses = [response]
         self.prompts: list[str] = []
 
     def generate_text(self, prompt: str) -> str:
         self.prompts.append(prompt)
-        return self.response
+        if len(self.responses) > 1:
+            return self.responses.pop(0)
+        return self.responses[0]
 
 
 def test_build_scenes_uses_llm_json_payload() -> None:
@@ -81,13 +86,52 @@ def test_build_scenes_falls_back_to_video_prompt_when_json_missing() -> None:
 
 def test_generate_video_prompt_uses_llm_text() -> None:
     llm = StubLLM(
-        json.dumps(
-            {
-                "mood": "Happy",
-                "has_foul_language": "No",
-                "video_prompt": "Stylized cartoon forest with a rabbit-eared heroine in a blue cloak, warm dawn glow, soft painted textures, consistent character design, expressive illustrated composition",
-            }
-        )
+        [
+            json.dumps(
+                {
+                    "mood": "Happy",
+                    "has_foul_language": "No",
+                    "video_prompt": "Stylized cartoon forest with a rabbit-eared heroine in a blue cloak, warm dawn glow, soft painted textures, consistent character design, expressive illustrated composition",
+                }
+            ),
+            json.dumps(
+                {
+                    "truthfulness": {
+                        "label": "MixedOrUnverifiable",
+                        "confidence_score": 0.61,
+                        "reason": "The transcript is descriptive but does not include enough evidence to verify its implied claims.",
+                    },
+                    "formality": {
+                        "label": "Mixed",
+                        "confidence_score": 0.73,
+                        "reason": "The wording blends conversational phrasing with some descriptive structure.",
+                    },
+                    "certainty_hedging": {
+                        "label": "Balanced",
+                        "confidence_score": 0.66,
+                        "reason": "The transcript makes observations without extreme certainty or heavy hedging.",
+                    },
+                    "persuasion_intent": {
+                        "label": "LowOrNone",
+                        "confidence_score": 0.81,
+                        "reason": "The speaker mainly describes events rather than trying to convince the listener.",
+                    },
+                    "claim_density": {
+                        "label": "Medium",
+                        "confidence_score": 0.57,
+                        "reason": "The narration contains some assertions but remains mostly atmospheric.",
+                    },
+                    "speaker_sentiment": [
+                        {
+                            "speaker": "Unknown",
+                            "sentiment": "Positive",
+                            "confidence_score": 0.62,
+                            "reason": "The speaker uses curious and appreciative language.",
+                        }
+                    ],
+                }
+            ),
+        ]
     )
     planner = ScenePlanner(llm)
 
@@ -101,7 +145,40 @@ def test_generate_video_prompt_uses_llm_text() -> None:
     assert plan.preclassification.has_foul_language is False
     assert plan.preclassification.word_count == 10
     assert plan.preclassification.sentence_count == 1
+    assert plan.preclassification.truthfulness_assessment.label == "MixedOrUnverifiable"
+    assert plan.preclassification.truthfulness_assessment.confidence_score == 0.61
+    assert (
+        "verify its implied claims"
+        in plan.preclassification.truthfulness_assessment.reason
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.formality.label == "Mixed"
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.certainty_hedging.label
+        == "Balanced"
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.persuasion_intent.label
+        == "LowOrNone"
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.claim_density.label
+        == "Medium"
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.speaker_sentiment[0].speaker
+        == "Unknown"
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.speaker_sentiment[
+            0
+        ].sentiment
+        == "Positive"
+    )
     assert '"has_foul_language"' in llm.prompts[0]
+    assert '"truthfulness"' in llm.prompts[1]
+    assert '"speaker_sentiment"' in llm.prompts[1]
 
 
 def test_generate_video_prompt_falls_back_when_llm_returns_blank() -> None:
@@ -120,13 +197,52 @@ def test_generate_video_prompt_falls_back_when_llm_returns_blank() -> None:
 
 def test_generate_video_prompt_enforces_cartoon_style_prefix_when_missing() -> None:
     llm = StubLLM(
-        json.dumps(
-            {
-                "mood": "Tense",
-                "has_foul_language": "Yes",
-                "video_prompt": "dramatic stylized forest chase with recurring heroine and glowing embers",
-            }
-        )
+        [
+            json.dumps(
+                {
+                    "mood": "Tense",
+                    "has_foul_language": "Yes",
+                    "video_prompt": "dramatic stylized forest chase with recurring heroine and glowing embers",
+                }
+            ),
+            json.dumps(
+                {
+                    "truthfulness": {
+                        "label": "LikelyMisleading",
+                        "confidence_score": 1.7,
+                        "reason": "The speaker uses urgent certainty without providing supporting detail.",
+                    },
+                    "formality": {
+                        "label": "Informal",
+                        "confidence_score": 0.84,
+                        "reason": "The phrasing is direct and conversational.",
+                    },
+                    "certainty_hedging": {
+                        "label": "Confident",
+                        "confidence_score": 1.3,
+                        "reason": "The commands are delivered with little hesitation.",
+                    },
+                    "persuasion_intent": {
+                        "label": "Strong",
+                        "confidence_score": 0.76,
+                        "reason": "The speaker is actively pushing the listener toward immediate action.",
+                    },
+                    "claim_density": {
+                        "label": "Low",
+                        "confidence_score": 0.7,
+                        "reason": "The transcript is short and contains few explicit factual claims.",
+                    },
+                    "speaker_sentiment": [
+                        {
+                            "speaker": "Unknown",
+                            "sentiment": "Negative",
+                            "confidence_score": 1.2,
+                            "reason": "The language carries urgency and pressure.",
+                        }
+                    ],
+                }
+            ),
+        ]
     )
     planner = ScenePlanner(llm)
 
@@ -138,6 +254,150 @@ def test_generate_video_prompt_enforces_cartoon_style_prefix_when_missing() -> N
     assert plan.preclassification.has_foul_language is True
     assert plan.preclassification.word_count == 4
     assert plan.preclassification.sentence_count == 2
+    assert plan.preclassification.truthfulness_assessment.label == "LikelyMisleading"
+    assert plan.preclassification.truthfulness_assessment.confidence_score == 1.0
+    assert (
+        plan.preclassification.interaction_style_assessment.formality.label
+        == "Informal"
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.certainty_hedging.confidence_score
+        == 1.0
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.speaker_sentiment[
+            0
+        ].sentiment
+        == "Negative"
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.speaker_sentiment[
+            0
+        ].confidence_score
+        == 1.0
+    )
+
+
+def test_generate_video_prompt_defaults_truthfulness_when_json_missing() -> None:
+    llm = StubLLM(
+        [
+            json.dumps(
+                {
+                    "mood": "Calm",
+                    "has_foul_language": "No",
+                    "video_prompt": "cartoon style village square with a storyteller near warm lanterns",
+                }
+            ),
+            "not json",
+        ]
+    )
+    planner = ScenePlanner(llm)
+
+    plan = planner.generate_video_prompt_plan(narration_text="A gentle narration.")
+
+    assert plan.preclassification is not None
+    assert plan.preclassification.truthfulness_assessment.label == "MixedOrUnverifiable"
+    assert plan.preclassification.truthfulness_assessment.confidence_score == 0.0
+    assert (
+        "limited to signals present in the transcript"
+        in plan.preclassification.truthfulness_assessment.reason
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.formality.label == "Mixed"
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.certainty_hedging.label
+        == "Balanced"
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.persuasion_intent.label
+        == "LowOrNone"
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.claim_density.label
+        == "Medium"
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.speaker_sentiment[0].speaker
+        == "Unknown"
+    )
+
+
+def test_generate_video_prompt_preserves_labeled_speaker_sentiment() -> None:
+    llm = StubLLM(
+        [
+            json.dumps(
+                {
+                    "mood": "Neutral",
+                    "has_foul_language": "No",
+                    "video_prompt": "cartoon style meeting room with two coworkers talking across a table",
+                }
+            ),
+            json.dumps(
+                {
+                    "truthfulness": {
+                        "label": "LikelyTruthful",
+                        "confidence_score": 0.52,
+                        "reason": "The exchange is internally consistent and modest in scope.",
+                    },
+                    "formality": {
+                        "label": "Formal",
+                        "confidence_score": 0.64,
+                        "reason": "The speakers use businesslike phrasing and explicit turn-taking.",
+                    },
+                    "certainty_hedging": {
+                        "label": "HeavilyHedged",
+                        "confidence_score": 0.55,
+                        "reason": "The speakers qualify several points with uncertainty markers.",
+                    },
+                    "persuasion_intent": {
+                        "label": "Moderate",
+                        "confidence_score": 0.48,
+                        "reason": "One speaker appears to be trying to steer the discussion without overt pressure.",
+                    },
+                    "claim_density": {
+                        "label": "High",
+                        "confidence_score": 0.69,
+                        "reason": "Most lines contain explicit assertions or proposed conclusions.",
+                    },
+                    "speaker_sentiment": [
+                        {
+                            "speaker": "SPEAKER_00",
+                            "sentiment": "Neutral",
+                            "confidence_score": 0.51,
+                            "reason": "The language is measured and procedural.",
+                        },
+                        {
+                            "speaker": "SPEAKER_01",
+                            "sentiment": "Mixed",
+                            "confidence_score": 0.58,
+                            "reason": "The speaker alternates between concern and agreement.",
+                        },
+                    ],
+                }
+            ),
+        ]
+    )
+    planner = ScenePlanner(llm)
+
+    plan = planner.generate_video_prompt_plan(
+        narration_text="SPEAKER_00: I believe the rollout is on track. SPEAKER_01: It should be, although I still have some concerns."
+    )
+
+    assert plan.preclassification is not None
+    assert (
+        len(plan.preclassification.interaction_style_assessment.speaker_sentiment) == 2
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.speaker_sentiment[0].speaker
+        == "SPEAKER_00"
+    )
+    assert (
+        plan.preclassification.interaction_style_assessment.speaker_sentiment[
+            1
+        ].sentiment
+        == "Mixed"
+    )
 
 
 def test_split_narration_distributes_sentences_evenly() -> None:

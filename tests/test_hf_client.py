@@ -267,6 +267,281 @@ def test_transcribe_audio_with_speakers_merges_consecutive_segments(
     assert text == "SPEAKER_00: hello there\nSPEAKER_01: general kenobi"
 
 
+def test_transcribe_audio_with_speakers_passes_diarization_speaker_constraints(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.hf_client as hf_module
+
+    monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
+    monkeypatch.setattr(hf_module.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+
+    class _Segment:
+        def __init__(self, start: float, end: float):
+            self.start = start
+            self.end = end
+
+    class _Diarization:
+        def itertracks(self, yield_label: bool = False):
+            assert yield_label is True
+            yield (_Segment(0.0, 1.0), None, "SPEAKER_00")
+
+    class _PyannotePipeline:
+        last_call_kwargs: dict[str, int] | None = None
+
+        @classmethod
+        def from_pretrained(cls, model_id: str, use_auth_token: str):
+            assert model_id.startswith("pyannote/speaker-diarization")
+            assert use_auth_token == "token"
+            return cls()
+
+        def __call__(self, _audio_path: str, **kwargs):
+            _PyannotePipeline.last_call_kwargs = kwargs
+            return _Diarization()
+
+    fake_pkg = types.ModuleType("pyannote")
+    fake_audio = types.ModuleType("pyannote.audio")
+    fake_audio.Pipeline = _PyannotePipeline
+    monkeypatch.setitem(sys.modules, "pyannote", fake_pkg)
+    monkeypatch.setitem(sys.modules, "pyannote.audio", fake_audio)
+
+    def _run(command, check, capture_output, text):
+        Path(command[-1]).write_bytes(b"chunk")
+        return types.SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr(hf_module.subprocess, "run", _run)
+
+    gateway = HuggingFaceGateway(_config(tmp_path))
+    source_audio = tmp_path / "sample.wav"
+    source_audio.write_bytes(b"audio")
+    monkeypatch.setattr(
+        gateway, "transcribe_audio", lambda _path: "hello", raising=False
+    )
+
+    text = gateway.transcribe_audio_with_speakers(source_audio, speaker_count=1)
+
+    assert text == "SPEAKER_00: hello"
+    assert _PyannotePipeline.last_call_kwargs == {"num_speakers": 1}
+
+
+def test_transcribe_audio_with_speakers_auto_collapses_to_primary_speaker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.hf_client as hf_module
+
+    monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
+    monkeypatch.setattr(hf_module.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+
+    class _Segment:
+        def __init__(self, start: float, end: float):
+            self.start = start
+            self.end = end
+
+    class _Diarization:
+        def itertracks(self, yield_label: bool = False):
+            assert yield_label is True
+            yield (_Segment(0.0, 9.0), None, "SPEAKER_00")
+            yield (_Segment(9.0, 10.0), None, "SPEAKER_01")
+
+    class _PyannotePipeline:
+        @classmethod
+        def from_pretrained(cls, model_id: str, use_auth_token: str):
+            assert model_id.startswith("pyannote/speaker-diarization")
+            assert use_auth_token == "token"
+            return cls()
+
+        def __call__(self, _audio_path: str, **_kwargs):
+            return _Diarization()
+
+    fake_pkg = types.ModuleType("pyannote")
+    fake_audio = types.ModuleType("pyannote.audio")
+    fake_audio.Pipeline = _PyannotePipeline
+    monkeypatch.setitem(sys.modules, "pyannote", fake_pkg)
+    monkeypatch.setitem(sys.modules, "pyannote.audio", fake_audio)
+
+    def _run(command, check, capture_output, text):
+        Path(command[-1]).write_bytes(b"chunk")
+        return types.SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr(hf_module.subprocess, "run", _run)
+
+    gateway = HuggingFaceGateway(_config(tmp_path))
+    source_audio = tmp_path / "sample.wav"
+    source_audio.write_bytes(b"audio")
+    transcripts = iter(["long section", "short section"])
+    monkeypatch.setattr(
+        gateway, "transcribe_audio", lambda _path: next(transcripts), raising=False
+    )
+
+    text = gateway.transcribe_audio_with_speakers(source_audio)
+
+    assert text == "SPEAKER_00: long section short section"
+
+
+def test_transcribe_audio_with_speakers_does_not_auto_collapse_with_explicit_speaker_count(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.hf_client as hf_module
+
+    monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
+    monkeypatch.setattr(hf_module.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+
+    class _Segment:
+        def __init__(self, start: float, end: float):
+            self.start = start
+            self.end = end
+
+    class _Diarization:
+        def itertracks(self, yield_label: bool = False):
+            assert yield_label is True
+            yield (_Segment(0.0, 9.0), None, "SPEAKER_00")
+            yield (_Segment(9.0, 10.0), None, "SPEAKER_01")
+
+    class _PyannotePipeline:
+        @classmethod
+        def from_pretrained(cls, model_id: str, use_auth_token: str):
+            assert model_id.startswith("pyannote/speaker-diarization")
+            assert use_auth_token == "token"
+            return cls()
+
+        def __call__(self, _audio_path: str, **_kwargs):
+            return _Diarization()
+
+    fake_pkg = types.ModuleType("pyannote")
+    fake_audio = types.ModuleType("pyannote.audio")
+    fake_audio.Pipeline = _PyannotePipeline
+    monkeypatch.setitem(sys.modules, "pyannote", fake_pkg)
+    monkeypatch.setitem(sys.modules, "pyannote.audio", fake_audio)
+
+    def _run(command, check, capture_output, text):
+        Path(command[-1]).write_bytes(b"chunk")
+        return types.SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr(hf_module.subprocess, "run", _run)
+
+    gateway = HuggingFaceGateway(_config(tmp_path))
+    source_audio = tmp_path / "sample.wav"
+    source_audio.write_bytes(b"audio")
+    transcripts = iter(["long section", "short section"])
+    monkeypatch.setattr(
+        gateway, "transcribe_audio", lambda _path: next(transcripts), raising=False
+    )
+
+    text = gateway.transcribe_audio_with_speakers(source_audio, speaker_count=2)
+
+    assert text == "SPEAKER_00: long section\nSPEAKER_01: short section"
+
+
+def test_transcribe_audio_with_speakers_respects_custom_dominance_threshold(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.hf_client as hf_module
+
+    monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
+    monkeypatch.setattr(hf_module.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+
+    class _Segment:
+        def __init__(self, start: float, end: float):
+            self.start = start
+            self.end = end
+
+    class _Diarization:
+        def itertracks(self, yield_label: bool = False):
+            assert yield_label is True
+            yield (_Segment(0.0, 9.0), None, "SPEAKER_00")
+            yield (_Segment(9.0, 10.0), None, "SPEAKER_01")
+
+    class _PyannotePipeline:
+        @classmethod
+        def from_pretrained(cls, model_id: str, use_auth_token: str):
+            assert model_id.startswith("pyannote/speaker-diarization")
+            assert use_auth_token == "token"
+            return cls()
+
+        def __call__(self, _audio_path: str, **_kwargs):
+            return _Diarization()
+
+    fake_pkg = types.ModuleType("pyannote")
+    fake_audio = types.ModuleType("pyannote.audio")
+    fake_audio.Pipeline = _PyannotePipeline
+    monkeypatch.setitem(sys.modules, "pyannote", fake_pkg)
+    monkeypatch.setitem(sys.modules, "pyannote.audio", fake_audio)
+
+    def _run(command, check, capture_output, text):
+        Path(command[-1]).write_bytes(b"chunk")
+        return types.SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr(hf_module.subprocess, "run", _run)
+
+    gateway = HuggingFaceGateway(_config(tmp_path))
+    source_audio = tmp_path / "sample.wav"
+    source_audio.write_bytes(b"audio")
+    transcripts = iter(["long section", "short section"])
+    monkeypatch.setattr(
+        gateway, "transcribe_audio", lambda _path: next(transcripts), raising=False
+    )
+
+    text = gateway.transcribe_audio_with_speakers(
+        source_audio, speaker_dominance_threshold=0.95
+    )
+
+    assert text == "SPEAKER_00: long section\nSPEAKER_01: short section"
+
+
+def test_transcribe_audio_with_speakers_uses_env_dominance_threshold(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.hf_client as hf_module
+
+    monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
+    monkeypatch.setattr(hf_module.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setenv("HF_SPEAKER_DOMINANCE_THRESHOLD", "0.95")
+
+    class _Segment:
+        def __init__(self, start: float, end: float):
+            self.start = start
+            self.end = end
+
+    class _Diarization:
+        def itertracks(self, yield_label: bool = False):
+            assert yield_label is True
+            yield (_Segment(0.0, 9.0), None, "SPEAKER_00")
+            yield (_Segment(9.0, 10.0), None, "SPEAKER_01")
+
+    class _PyannotePipeline:
+        @classmethod
+        def from_pretrained(cls, model_id: str, use_auth_token: str):
+            assert model_id.startswith("pyannote/speaker-diarization")
+            assert use_auth_token == "token"
+            return cls()
+
+        def __call__(self, _audio_path: str, **_kwargs):
+            return _Diarization()
+
+    fake_pkg = types.ModuleType("pyannote")
+    fake_audio = types.ModuleType("pyannote.audio")
+    fake_audio.Pipeline = _PyannotePipeline
+    monkeypatch.setitem(sys.modules, "pyannote", fake_pkg)
+    monkeypatch.setitem(sys.modules, "pyannote.audio", fake_audio)
+
+    def _run(command, check, capture_output, text):
+        Path(command[-1]).write_bytes(b"chunk")
+        return types.SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr(hf_module.subprocess, "run", _run)
+
+    gateway = HuggingFaceGateway(_config(tmp_path))
+    source_audio = tmp_path / "sample.wav"
+    source_audio.write_bytes(b"audio")
+    transcripts = iter(["long section", "short section"])
+    monkeypatch.setattr(
+        gateway, "transcribe_audio", lambda _path: next(transcripts), raising=False
+    )
+
+    text = gateway.transcribe_audio_with_speakers(source_audio)
+
+    assert text == "SPEAKER_00: long section\nSPEAKER_01: short section"
+
+
 def test_transcribe_audio_with_speakers_raises_helpful_error_for_gated_models(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
