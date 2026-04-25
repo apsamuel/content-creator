@@ -91,9 +91,12 @@ class FakeGateway:
 
 
 class FakePlanner:
-    def __init__(self, _gateway: FakeGateway):
+    def __init__(
+        self, _gateway: FakeGateway, *, image_composition_mode: str = "balanced"
+    ):
         self.calls: list[tuple[str, str, float]] = []
         self.generated_video_prompt_plan_inputs: list[str] = []
+        self.prepared_image_prompts: list[tuple[str, int, int | None]] = []
 
     def generate_video_prompt_plan(self, *, narration_text: str) -> VideoPromptPlan:
         self.generated_video_prompt_plan_inputs.append(narration_text)
@@ -158,6 +161,12 @@ class FakePlanner:
             ],
             scene_prompt="fake scene prompt",
         )
+
+    def prepare_image_prompt(
+        self, prompt_text: str, *, scene_index: int = 0, total_scenes: int | None = None
+    ) -> str:
+        self.prepared_image_prompts.append((prompt_text, scene_index, total_scenes))
+        return f"{prompt_text} :: prepared {scene_index + 1}/{total_scenes}"
 
 
 class FakeMedia:
@@ -275,6 +284,13 @@ def test_generate_from_text_writes_manifest(
     assert manifest["video_prompt"] == "Video direction"
     assert manifest["video_prompt_preclassification"] is None
     assert len(manifest["scenes"]) == 2
+    assert manifest["scenes"][0]["prepared_prompt"] == "Prompt A :: prepared 1/2"
+    assert manifest["scenes"][1]["prepared_prompt"] == "Prompt B :: prepared 2/2"
+    assert pipeline._planner.prepared_image_prompts == [
+        ("Prompt A", 0, 2),
+        ("Prompt B", 1, 2),
+    ]
+    assert pipeline._gateway.generated_images[0][0].endswith("prepared 1/2")
     assert any(msg.startswith("🐛 Rendering image for scene") for msg in statuses)
 
 

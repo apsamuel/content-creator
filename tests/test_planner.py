@@ -58,12 +58,16 @@ def test_build_scenes_uses_llm_json_payload() -> None:
     assert scenes[0].prompt.startswith(
         "Mira, a rabbit-eared traveler in a glowing plush forest"
     )
-    assert scenes[0].prompt.endswith("Mira steps into a sunrise clearing.")
+    assert (
+        "Mira steps into a sunrise clearing, wide establishing shot" in scenes[0].prompt
+    )
     assert (
         "Carry forward: same cloak, same clearing, same lantern trail"
         in scenes[1].prompt
     )
     assert "Previous beat: Mira enters the clearing" in scenes[1].prompt
+    assert "low-angle hero framing" in scenes[1].prompt
+    assert "close emotional portrait" in scenes[2].prompt
     assert scenes[1].index == 2
     assert round(sum(scene.duration_seconds for scene in scenes), 2) == 12.0
     assert '"story_anchor"' in llm.prompts[0]
@@ -86,6 +90,36 @@ def test_build_scenes_falls_back_to_video_prompt_when_json_missing() -> None:
 
     assert len(scenes) >= 3
     assert all(scene.prompt == "Fallback visual direction" for scene in scenes)
+
+
+def test_prepare_image_prompt_rotates_balanced_compositions() -> None:
+    planner = ScenePlanner(StubLLM("{}"))
+
+    prompts = [
+        planner.prepare_image_prompt(
+            "Hero stands in the rain", scene_index=index, total_scenes=4
+        )
+        for index in range(4)
+    ]
+
+    assert "wide establishing shot" in prompts[0]
+    assert "low-angle hero framing" in prompts[1]
+    assert "close emotional portrait" in prompts[2]
+    assert "close emotional portrait" in prompts[3]
+
+
+def test_prepare_image_prompt_normalizes_motion_language() -> None:
+    planner = ScenePlanner(StubLLM("{}"), image_composition_mode="dynamic")
+
+    prompt = planner.prepare_image_prompt(
+        "Hero charges forward with camera shake and handheld camera",
+        scene_index=1,
+        total_scenes=3,
+    )
+
+    assert "subtle motion energy" in prompt
+    assert "dynamic handheld framing" in prompt
+    assert "camera shake" not in prompt.lower()
 
 
 def test_generate_video_prompt_uses_llm_text() -> None:
@@ -182,6 +216,8 @@ def test_generate_video_prompt_uses_llm_text() -> None:
     )
     assert '"has_foul_language"' in llm.prompts[0]
     assert "80s/90s retro anime aesthetic" in llm.prompts[0]
+    assert "low-angle hero framing" in llm.prompts[0]
+    assert "dynamic handheld framing" in llm.prompts[0]
     assert '"truthfulness"' in llm.prompts[1]
     assert '"speaker_sentiment"' in llm.prompts[1]
     assert plan.prompts is not None
@@ -213,7 +249,7 @@ def test_generate_video_prompt_enforces_cartoon_style_prefix_when_missing() -> N
                 {
                     "mood": "Tense",
                     "has_foul_language": "Yes",
-                    "video_prompt": "dramatic stylized forest chase with recurring heroine and glowing embers",
+                    "video_prompt": "dramatic stylized forest chase with recurring heroine, glowing embers, and camera shake",
                 }
             ),
             json.dumps(
@@ -263,7 +299,9 @@ def test_generate_video_prompt_enforces_cartoon_style_prefix_when_missing() -> N
         "Cartoon style illustrated scene in 80s/90s retro anime style"
     )
     assert "Makoto Shinkai-inspired artistry" in plan.video_prompt
-    assert "camera-shake energy" in plan.video_prompt
+    assert "subtle motion energy" in plan.video_prompt
+    assert "dynamic diagonal layout" in plan.video_prompt
+    assert "camera shake" not in plan.video_prompt.lower()
     assert plan.preclassification is not None
     assert plan.preclassification.mood == "Tense"
     assert plan.preclassification.has_foul_language is True
@@ -351,6 +389,7 @@ def test_generate_video_prompt_appends_house_style_to_existing_cartoon_prompt() 
     assert plan.video_prompt.startswith("cartoon style seaside reunion")
     assert "80s/90s retro anime style" in plan.video_prompt
     assert "Studio Ghibli and Makoto Shinkai-inspired artistry" in plan.video_prompt
+    assert "dynamic diagonal layout" in plan.video_prompt
 
 
 def test_generate_video_prompt_defaults_truthfulness_when_json_missing() -> None:

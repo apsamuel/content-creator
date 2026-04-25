@@ -51,7 +51,9 @@ class VideoGenerationPipeline:
         self._debug = debug
         self._status_callback = status_callback
         self._gateway = HuggingFaceGateway(config)
-        self._planner = ScenePlanner(self._gateway)
+        self._planner = ScenePlanner(
+            self._gateway, image_composition_mode=config.image_composition_mode
+        )
         self._media = MediaAssembler(
             width=config.width, height=config.height, fps=config.fps
         )
@@ -474,13 +476,17 @@ class VideoGenerationPipeline:
 
         def _render_scene_image(
             scene_index: int, scene_prompt: str
-        ) -> tuple[int, Path, float]:
+        ) -> tuple[int, Path, float, str]:
             start = perf_counter()
             destination = images_dir / f"scene_{scene_index:02d}.png"
-            self._gateway.generate_image(scene_prompt, destination)
-            return scene_index, destination, perf_counter() - start
+            prepared_prompt = self._planner.prepare_image_prompt(
+                scene_prompt, scene_index=scene_index - 1, total_scenes=total_scenes
+            )
+            self._gateway.generate_image(prepared_prompt, destination)
+            return scene_index, destination, perf_counter() - start, prepared_prompt
 
         rendered_paths: dict[int, Path] = {}
+        rendered_prepared_prompts: dict[int, str] = {}
         completed = 0
 
         if worker_count == 1:
@@ -489,10 +495,11 @@ class VideoGenerationPipeline:
                     self._status(
                         f"🐛 Rendering image for scene {scene.index}/{len(scenes)}"
                     )
-                scene_index, image_path, elapsed = _render_scene_image(
+                scene_index, image_path, elapsed, prepared = _render_scene_image(
                     scene.index, scene.prompt
                 )
                 rendered_paths[scene_index] = image_path
+                rendered_prepared_prompts[scene_index] = prepared
                 completed += 1
                 self._emit_progress(
                     "📷 Image generation progress",
@@ -510,8 +517,9 @@ class VideoGenerationPipeline:
                     for scene in scenes
                 }
                 for future in as_completed(futures):
-                    scene_index, image_path, elapsed = future.result()
+                    scene_index, image_path, elapsed, prepared = future.result()
                     rendered_paths[scene_index] = image_path
+                    rendered_prepared_prompts[scene_index] = prepared
                     completed += 1
                     self._emit_progress(
                         "📷 Image generation progress",
@@ -521,6 +529,15 @@ class VideoGenerationPipeline:
                     )
 
         image_paths = [rendered_paths[index] for index in sorted(rendered_paths)]
+        if rendered_prepared_prompts:
+            manifest_scenes = manifest.get("scenes")
+            if isinstance(manifest_scenes, list):
+                for scene_dict in manifest_scenes:
+                    if not isinstance(scene_dict, dict):
+                        continue
+                    idx = scene_dict.get("index")
+                    if isinstance(idx, int) and idx in rendered_prepared_prompts:
+                        scene_dict["prepared_prompt"] = rendered_prepared_prompts[idx]
         images = manifest.get("images")
         if isinstance(images, list):
             images.clear()

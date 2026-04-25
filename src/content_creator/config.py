@@ -11,6 +11,7 @@ DEFAULT_IMAGE_NEGATIVE_PROMPT = (
     "text, subtitles, watermark, logo, border, frame, photorealistic, live action, "
     "flat lighting, muddy colors"
 )
+DEFAULT_IMAGE_COMPOSITION_MODE = "balanced"
 
 
 @dataclass(slots=True)
@@ -32,6 +33,7 @@ class AppConfig:
     height: int = 720
     fps: int = 24
     image_negative_prompt: str = DEFAULT_IMAGE_NEGATIVE_PROMPT
+    image_composition_mode: str = DEFAULT_IMAGE_COMPOSITION_MODE
 
     @classmethod
     def from_env(
@@ -80,9 +82,25 @@ class AppConfig:
             os.getenv("HF_IMAGE_NEGATIVE_PROMPT", "").strip()
             or DEFAULT_IMAGE_NEGATIVE_PROMPT
         )
+        image_composition_mode = (
+            os.getenv("HF_IMAGE_COMPOSITION_MODE", DEFAULT_IMAGE_COMPOSITION_MODE)
+            .strip()
+            .lower()
+            or DEFAULT_IMAGE_COMPOSITION_MODE
+        )
+        if image_composition_mode not in {
+            "balanced",
+            "dynamic",
+            "portrait",
+            "establishing",
+        }:
+            raise ValueError(
+                "HF_IMAGE_COMPOSITION_MODE must be one of: balanced, dynamic, portrait, establishing"
+            )
         return cls(
             hf_token=token,
             work_dir=base_dir,
             models=models,
             image_negative_prompt=image_negative_prompt,
+            image_composition_mode=image_composition_mode,
         )

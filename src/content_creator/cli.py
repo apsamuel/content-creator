@@ -21,6 +21,7 @@ def _print_startup_check(config: AppConfig) -> None:
     click.echo(f"🛡️ Content safety model: {config.models.safety_model}")
     click.echo(f"🎙️ Diarization model: {config.models.diarization_model}")
     click.echo(f"🖼️ Image model: {config.models.image_model}")
+    click.echo(f"🎬 Image composition mode: {config.image_composition_mode}")
 
 
 def _build_pipeline(

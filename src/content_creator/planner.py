@@ -67,9 +67,46 @@ class ScenePlanner:
         "illustration, sharp linework, dramatic composition, expressive characters, "
         "subtle camera-shake energy, Studio Ghibli and Makoto Shinkai-inspired artistry"
     )
+    _COMPOSITION_GUIDANCE = (
+        "favor still-image-friendly composition cues such as low-angle hero framing, "
+        "wide establishing shots, close emotional portraits, or dynamic diagonal layouts"
+    )
+    _MOTION_GUIDANCE = (
+        "express motion as subtle motion energy or dynamic handheld framing rather than "
+        "literal shake blur"
+    )
+    _COMPOSITION_SEQUENCES = {
+        "balanced": (
+            "wide establishing shot",
+            "low-angle hero framing",
+            "close emotional portrait",
+            "dynamic diagonal layout",
+        ),
+        "dynamic": (
+            "dynamic diagonal layout",
+            "low-angle hero framing",
+            "dynamic handheld framing",
+            "wide establishing shot",
+        ),
+        "portrait": (
+            "close emotional portrait",
+            "low-angle hero framing",
+            "dynamic diagonal layout",
+            "close emotional portrait",
+        ),
+        "establishing": (
+            "wide establishing shot",
+            "dynamic diagonal layout",
+            "low-angle hero framing",
+            "wide establishing shot",
+        ),
+    }
 
-    def __init__(self, llm: Any):
+    def __init__(self, llm: Any, *, image_composition_mode: str = "balanced"):
         self._llm = llm
+        self._image_composition_mode = self._normalize_composition_mode(
+            image_composition_mode
+        )
 
     def generate_video_prompt(self, *, narration_text: str) -> str:
         return self.generate_video_prompt_plan(
@@ -191,7 +228,9 @@ class ScenePlanner:
         payload = self._extract_json(raw)
         scene_payloads = payload.get("scenes", [])
         if not scene_payloads:
-            scene_payloads = [{"prompt": video_prompt}] * scene_count
+            scene_payloads = [
+                {"prompt": video_prompt, "_is_fallback": True}
+            ] * scene_count
 
         story_anchor = self._normalize_fragment(str(payload.get("story_anchor", "")))
         durations = self._spread_duration(total_duration_seconds, len(scene_payloads))
@@ -199,6 +238,14 @@ class ScenePlanner:
         previous_scene_summary = ""
         for index, item in enumerate(scene_payloads):
             prompt_text = self._extract_prompt_text(item, fallback=video_prompt)
+            if (
+                isinstance(item, dict)
+                and str(item.get("prompt", "")).strip()
+                and not bool(item.get("_is_fallback"))
+            ):
+                prompt_text = self.prepare_image_prompt(
+                    prompt_text, scene_index=index, total_scenes=len(scene_payloads)
+                )
             summary = self._normalize_fragment(str(item.get("summary", "")))
             continuity = self._normalize_fragment(str(item.get("continuity", "")))
             composed_prompt = self._compose_prompt(
@@ -262,6 +309,8 @@ Constraints:
 - Each scene prompt must be grounded in that scene's narration chunk and reflect its specific content.
 - Each prompt must be a single sentence.
 - Keep a consistent visual style across the video (follow the style template below).
+- Prefer composition language that diffusion models render well for still images: {self._COMPOSITION_GUIDANCE}.
+- When the shot implies camera shake or kinetic energy, phrase it as {self._MOTION_GUIDANCE}.
 - Avoid text overlays, subtitles, logos, watermarks, borders, and split screens.
 - Use prompts that work well for text-to-image diffusion models.
 
@@ -288,6 +337,8 @@ Constraints:
 - video_prompt must produce a anime cartoon style image only. No photorealistic, live-action, or real camera language.
 - video_prompt must follow this fixed house style for every generated image: {self._GLOBAL_VIDEO_STYLE}.
 - video_prompt must describe recurring protagonist, environment, mood, lighting, palette, and stylized composition.
+- video_prompt should prefer still-image composition language: {self._COMPOSITION_GUIDANCE}.
+- If motion or impact is important, phrase it as {self._MOTION_GUIDANCE}.
 - video_prompt must be one sentence and under 110 words.
 - DO NOT use text overlays, subtitles, logos, or watermarks.
 
@@ -472,13 +523,43 @@ Transcript:
             return len(matches)
         return 1 if self._normalize_fragment(text) else 0
 
-    def _enforce_cartoon_style(self, prompt_text: str) -> str:
+    def prepare_image_prompt(
+        self, prompt_text: str, *, scene_index: int = 0, total_scenes: int | None = None
+    ) -> str:
         normalized = self._normalize_fragment(prompt_text)
+        if not normalized:
+            return normalized
+        return self._normalize_still_image_language(
+            normalized,
+            preferred_composition=self._composition_cue_for_scene(
+                scene_index=scene_index, total_scenes=total_scenes
+            ),
+        )
+
+    def _normalize_composition_mode(self, value: str) -> str:
+        normalized = self._normalize_fragment(value).lower().replace(" ", "-")
+        if normalized not in self._COMPOSITION_SEQUENCES:
+            return "balanced"
+        return normalized
+
+    def _composition_cue_for_scene(
+        self, *, scene_index: int, total_scenes: int | None
+    ) -> str:
+        sequence = self._COMPOSITION_SEQUENCES[self._image_composition_mode]
+        if self._image_composition_mode == "balanced" and total_scenes:
+            if scene_index == 0:
+                return "wide establishing shot"
+            if total_scenes > 1 and scene_index == total_scenes - 1:
+                return "close emotional portrait"
+        return sequence[scene_index % len(sequence)]
+
+    def _enforce_cartoon_style(self, prompt_text: str) -> str:
+        normalized = self.prepare_image_prompt(prompt_text)
         if not normalized:
             return (
                 "Cartoon style illustrated fantasy scene in an 80s/90s retro anime style, "
                 "with vibrant colors, cel shading, detailed illustration, sharp linework, "
-                "dramatic composition, expressive characters, subtle camera-shake energy, "
+                "dramatic composition, expressive characters, low-angle hero framing, subtle motion energy, "
                 "and Studio Ghibli and Makoto Shinkai-inspired artistry"
             )
         lowered = normalized.lower()
@@ -503,11 +584,40 @@ Transcript:
         style_suffix = (
             "80s/90s retro anime style, vibrant colors, cel shading, detailed "
             "illustration, sharp linework, dramatic composition, expressive characters, "
-            "subtle camera-shake energy, Studio Ghibli and Makoto Shinkai-inspired artistry"
+            "low-angle hero framing, dynamic diagonal layout, subtle motion energy, "
+            "Studio Ghibli and Makoto Shinkai-inspired artistry"
         )
         if needs_prefix:
             return f"Cartoon style illustrated scene in {style_suffix}: {normalized}"
         return f"{normalized}, {style_suffix}"
+
+    def _normalize_still_image_language(
+        self, prompt_text: str, *, preferred_composition: str | None = None
+    ) -> str:
+        if not prompt_text:
+            return prompt_text
+
+        normalized = re.sub(
+            r"\bcamera shake\b|\bshaky camera\b|\bshake blur\b",
+            "subtle motion energy",
+            prompt_text,
+            flags=re.IGNORECASE,
+        )
+        normalized = re.sub(
+            r"\bhandheld camera\b",
+            "dynamic handheld framing",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if not re.search(
+            r"low-angle|wide establishing|close emotional portrait|dynamic diagonal|dynamic handheld framing",
+            normalized,
+            flags=re.IGNORECASE,
+        ):
+            normalized = (
+                f"{normalized}, {preferred_composition or 'dynamic diagonal layout'}"
+            )
+        return normalized
 
     def _extract_json(self, raw: str) -> dict[str, Any]:
         match = re.search(r"\{.*\}", raw, flags=re.DOTALL)

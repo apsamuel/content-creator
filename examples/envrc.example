@@ -10,6 +10,7 @@ HF_DIARIZATION_MODEL=pyannote/speaker-diarization-3.1
 HF_TTS_MODEL=hexgrad/Kokoro-82M
 HF_IMAGE_MODEL=stabilityai/stable-diffusion-xl-base-1.0
 HF_IMAGE_NEGATIVE_PROMPT=blurry, lowres, low detail, soft focus, bad anatomy, bad hands, extra fingers, missing fingers, extra limbs, duplicate subjects, deformed face, cross-eyed, text, subtitles, watermark, logo, border, frame, photorealistic, live action, flat lighting, muddy colors
+HF_IMAGE_COMPOSITION_MODE=balanced
 
 # Working directory for generated intermediates and manifests.
 CONTENT_CREATOR_WORK_DIR=./output

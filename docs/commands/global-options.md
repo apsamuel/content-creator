@@ -54,9 +54,12 @@ The gateway retries on rate limits (`429`) and transient server/network errors u
 
 - `HF_IMAGE_MODEL` selects the default image model when `-I/--image-model` is not passed.
 - `HF_IMAGE_NEGATIVE_PROMPT` sets the default negative prompt appended to every Hugging Face text-to-image request.
+- `HF_IMAGE_COMPOSITION_MODE` sets the planner's default composition rotation. Supported values: `balanced`, `dynamic`, `portrait`, `establishing`.
 - `CONTENT_CREATOR_WORK_DIR` controls where manifests, audio intermediates, and generated scene images are written.
 
 Use `HF_IMAGE_NEGATIVE_PROMPT` to suppress recurring artifacts globally instead of repeating negative terms in every scene prompt. The default preset targets blur, anatomy mistakes, duplicate limbs, text overlays, watermarks, borders, photorealism, flat lighting, and muddy colors.
+
+Use `HF_IMAGE_COMPOSITION_MODE` to bias framing globally without rewriting individual prompts. `balanced` rotates between wide, hero, and portrait-friendly compositions; the other modes bias more heavily toward their named framing style.
 
 ## Startup Behavior
 

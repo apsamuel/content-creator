@@ -45,6 +45,8 @@ set +a
 
 `HF_IMAGE_NEGATIVE_PROMPT` in `.envrc` controls the default negative prompt passed to Hugging Face image generation. Use it to suppress recurring artifacts such as blur, anatomy errors, watermarks, text overlays, flat lighting, muddy colors, or unwanted photorealism.
 
+`HF_IMAGE_COMPOSITION_MODE` sets the default still-image framing strategy used when the planner prepares scene prompts for image generation. Supported values are `balanced`, `dynamic`, `portrait`, and `establishing`.
+
 ## Commands
 
 Detailed command documentation with flowcharts is available in [docs/README.md](docs/README.md):
@@ -186,6 +188,7 @@ Image generation environment variables:
 
 - `HF_IMAGE_MODEL` selects the Hugging Face image model.
 - `HF_IMAGE_NEGATIVE_PROMPT` sets the default negative prompt applied to every generated image request.
+- `HF_IMAGE_COMPOSITION_MODE` controls the default composition rotation used while preparing scene prompts. Use `balanced` for mixed coverage, `dynamic` for more aggressive angles, `portrait` for character-forward framing, or `establishing` for wider scene coverage.
 - `CONTENT_CREATOR_WORK_DIR` controls where intermediate assets and manifests are written.
 
 Enable debug mode (emoji status + verbose chunk progress + full tracebacks):

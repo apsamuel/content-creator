@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from content_creator.config import AppConfig, DEFAULT_IMAGE_NEGATIVE_PROMPT
+from content_creator.config import (
+    AppConfig,
+    DEFAULT_IMAGE_COMPOSITION_MODE,
+    DEFAULT_IMAGE_NEGATIVE_PROMPT,
+)
 
 
 def test_from_env_requires_hf_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -55,6 +59,27 @@ def test_from_env_reads_image_negative_prompt_override(
     assert config.image_negative_prompt == "blurry, watermark, extra fingers"
 
 
+def test_from_env_reads_image_composition_mode_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "token-xyz")
+    monkeypatch.setenv("HF_IMAGE_COMPOSITION_MODE", "dynamic")
+
+    config = AppConfig.from_env(work_dir=tmp_path)
+
+    assert config.image_composition_mode == "dynamic"
+
+
+def test_from_env_rejects_invalid_image_composition_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "token-xyz")
+    monkeypatch.setenv("HF_IMAGE_COMPOSITION_MODE", "wild")
+
+    with pytest.raises(ValueError, match="HF_IMAGE_COMPOSITION_MODE"):
+        AppConfig.from_env(work_dir=tmp_path)
+
+
 def test_from_env_prefers_explicit_model_args(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -98,3 +123,4 @@ def test_from_env_uses_builtin_model_defaults_when_env_missing(
     assert config.models.tts_model == "hexgrad/Kokoro-82M"
     assert config.models.image_model == "stabilityai/stable-diffusion-xl-base-1.0"
     assert config.image_negative_prompt == DEFAULT_IMAGE_NEGATIVE_PROMPT
+    assert config.image_composition_mode == DEFAULT_IMAGE_COMPOSITION_MODE
