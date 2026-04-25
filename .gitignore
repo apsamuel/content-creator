@@ -177,6 +177,10 @@ pyrightconfig.json
 .envrc
 
 
+# data files
+# src/content_creator/data/profanity_words.txt
+# src/content_creator
+
 
 # work and output directories
 output/

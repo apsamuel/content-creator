@@ -9,6 +9,7 @@ import click
 
 from content_creator.config import AppConfig
 from content_creator.pipeline import VideoGenerationPipeline
+from content_creator.profanity_sfx import analyze_profanity_lexicon
 
 
 def _print_startup_check(config: AppConfig) -> None:
@@ -427,6 +428,41 @@ def from_text(
     default=None,
     help="Override Hugging Face moderation model (default: unitary/unbiased-toxic-roberta).",
 )
+@click.option(
+    "--profanity-sfx/--no-profanity-sfx",
+    default=False,
+    show_default=True,
+    help="Replace profane words in output audio using timestamped STT and sound effects.",
+)
+@click.option(
+    "--profanity-sound-pack-dir",
+    default=None,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Directory containing sound effect files (wav/mp3/m4a/flac/ogg).",
+)
+@click.option(
+    "--profanity-words-file",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help=(
+        "Optional profanity lexicon file; defaults to bundled data/profanity_words.txt. "
+        "Each line can be a single word or multi-word phrase."
+    ),
+)
+@click.option(
+    "--profanity-pad-ms",
+    default=80,
+    show_default=True,
+    type=click.IntRange(0, None),
+    help="Padding around each profane word when applying replacement SFX.",
+)
+@click.option(
+    "--profanity-duck-db",
+    default=-16.0,
+    show_default=True,
+    type=float,
+    help="Volume reduction (dB) applied to source audio during profanity windows.",
+)
 @click.option("--work-dir", default=None, help="Directory for intermediate assets.")
 @click.option(
     "--view-preclassification/--no-view-preclassification",
@@ -453,6 +489,11 @@ def from_audio(
     content_safety_filter: bool,
     content_safety_threshold: float,
     content_safety_model: str | None,
+    profanity_sfx: bool,
+    profanity_sound_pack_dir: Path | None,
+    profanity_words_file: Path | None,
+    profanity_pad_ms: int,
+    profanity_duck_db: float,
     work_dir: str | None,
     view_preclassification: bool,
 ) -> None:
@@ -510,6 +551,11 @@ def from_audio(
             content_safety_filter=content_safety_filter,
             content_safety_threshold=content_safety_threshold,
             content_safety_model=content_safety_model,
+            profanity_sfx_enabled=profanity_sfx,
+            profanity_sound_pack_dir=profanity_sound_pack_dir,
+            profanity_words_file=profanity_words_file,
+            profanity_pad_seconds=(profanity_pad_ms / 1000.0),
+            profanity_duck_db=profanity_duck_db,
             view_preclassification=view_preclassification,
         )
         click.echo(f"✅ Video written to {result}")
@@ -605,6 +651,47 @@ def from_audio(
     default=None,
     help="Override Hugging Face moderation model (default: unitary/unbiased-toxic-roberta).",
 )
+@click.option(
+    "--profanity-sfx/--no-profanity-sfx",
+    default=False,
+    show_default=True,
+    help="Replace profane words in a rendered audio file using timestamped STT and sound effects.",
+)
+@click.option(
+    "--profanity-sfx-output",
+    default=None,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Output audio path for profanity-SFX rendering (required when --profanity-sfx is enabled).",
+)
+@click.option(
+    "--profanity-sound-pack-dir",
+    default=None,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Directory containing sound effect files (wav/mp3/m4a/flac/ogg).",
+)
+@click.option(
+    "--profanity-words-file",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help=(
+        "Optional profanity lexicon file; defaults to bundled data/profanity_words.txt. "
+        "Each line can be a single word or multi-word phrase."
+    ),
+)
+@click.option(
+    "--profanity-pad-ms",
+    default=80,
+    show_default=True,
+    type=click.IntRange(0, None),
+    help="Padding around each profane word when applying replacement SFX.",
+)
+@click.option(
+    "--profanity-duck-db",
+    default=-16.0,
+    show_default=True,
+    type=float,
+    help="Volume reduction (dB) applied to source audio during profanity windows.",
+)
 @click.option("--work-dir", default=None, help="Directory for intermediate assets.")
 @click.pass_context
 def transcribe(
@@ -622,11 +709,21 @@ def transcribe(
     content_safety_filter: bool,
     content_safety_threshold: float,
     content_safety_model: str | None,
+    profanity_sfx: bool,
+    profanity_sfx_output: Path | None,
+    profanity_sound_pack_dir: Path | None,
+    profanity_words_file: Path | None,
+    profanity_pad_ms: int,
+    profanity_duck_db: float,
     work_dir: str | None,
 ) -> None:
     """Generate a transcript for an audio file using the configured AI STT model."""
 
     def _operation() -> None:
+        if profanity_sfx and profanity_sfx_output is None:
+            raise click.ClickException(
+                "--profanity-sfx-output is required when --profanity-sfx is enabled"
+            )
         resolved_transcribe_workers = _resolve_worker_count(
             transcribe_workers,
             env_var="HF_TRANSCRIBE_WORKERS",
@@ -667,6 +764,12 @@ def transcribe(
             content_safety_filter=content_safety_filter,
             content_safety_threshold=content_safety_threshold,
             content_safety_model=content_safety_model,
+            profanity_sfx_enabled=profanity_sfx,
+            profanity_sfx_output_path=profanity_sfx_output,
+            profanity_sound_pack_dir=profanity_sound_pack_dir,
+            profanity_words_file=profanity_words_file,
+            profanity_pad_seconds=(profanity_pad_ms / 1000.0),
+            profanity_duck_db=profanity_duck_db,
         )
         if output_path is not None:
             click.echo(f"✅ Transcript written to {output_path}")
@@ -706,5 +809,61 @@ def doctor(ctx: click.Context, work_dir: str | None) -> None:
         click.echo(f"🎧 STT model: {config.models.stt_model}")
         click.echo(f"🔊 TTS model: {config.models.tts_model}")
         click.echo(f"🖼️ Image model: {config.models.image_model}")
+
+    _run_with_debug(ctx, _operation)
+
+
+@cli.command("lexicon-doctor")
+@click.option(
+    "--profanity-words-file",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help=(
+        "Optional profanity lexicon file; defaults to bundled data/profanity_words.txt. "
+        "Each line can be a single word or multi-word phrase."
+    ),
+)
+@click.option(
+    "--max-groups",
+    default=20,
+    show_default=True,
+    type=click.IntRange(1, None),
+    help="Maximum near-duplicate groups to print.",
+)
+@click.pass_context
+def lexicon_doctor(
+    ctx: click.Context, profanity_words_file: Path | None, max_groups: int
+) -> None:
+    """Inspect profanity lexicon quality for duplicates and normalization collisions."""
+
+    def _operation() -> None:
+        report = analyze_profanity_lexicon(profanity_words_file)
+        click.echo(f"📄 Lexicon file: {report.path}")
+        click.echo(f"🧾 Total lines: {report.total_lines}")
+        click.echo(f"🔎 Active entries: {report.active_lines}")
+        click.echo(f"🧠 Unique normalized entries: {report.unique_normalized_entries}")
+
+        exact_count = len(report.exact_duplicates)
+        near_count = len(report.near_duplicates)
+        click.echo(f"♻️ Exact duplicate entries: {exact_count}")
+        click.echo(f"🧬 Near-duplicate groups: {near_count}")
+
+        if report.exact_duplicates:
+            click.echo("\nExact duplicate entries:")
+            for entry, count in report.exact_duplicates.items():
+                click.echo(f"- {entry} (x{count})")
+
+        if report.near_duplicates:
+            click.echo("\nNear-duplicate groups (same normalized phrase):")
+            for index, (normalized, forms) in enumerate(report.near_duplicates.items()):
+                if index >= max_groups:
+                    remaining = near_count - max_groups
+                    if remaining > 0:
+                        click.echo(f"- ... and {remaining} more groups")
+                    break
+                click.echo(f"- {normalized}: {', '.join(forms)}")
+
+        if not report.exact_duplicates and not report.near_duplicates:
+            click.echo("✅ No duplicates detected.")
 
     _run_with_debug(ctx, _operation)

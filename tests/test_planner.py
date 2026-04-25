@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from content_creator.planner import ScenePlanner
+from content_creator.planner import ScenePlanner, ScenePlan
 
 
 class StubLLM:
@@ -46,12 +46,14 @@ def test_build_scenes_uses_llm_json_payload() -> None:
     )
     planner = ScenePlanner(llm)
 
-    scenes = planner.build_scenes(
+    scene_plan = planner.build_scenes(
         narration_text="A short city montage.",
         video_prompt="Cinematic urban documentary style.",
         total_duration_seconds=12.0,
     )
+    scenes = scene_plan.scenes
 
+    assert isinstance(scene_plan, ScenePlan)
     assert len(scenes) == 3
     assert scenes[0].prompt.startswith(
         "Mira, a rabbit-eared traveler in a glowing plush forest"
@@ -68,17 +70,19 @@ def test_build_scenes_uses_llm_json_payload() -> None:
     assert '"continuity"' in llm.prompts[0]
     assert "Style template" in llm.prompts[0]
     assert "Scene 1 narration chunk" in llm.prompts[0]
+    assert scene_plan.scene_prompt == llm.prompts[0]
 
 
 def test_build_scenes_falls_back_to_video_prompt_when_json_missing() -> None:
     llm = StubLLM("no json in this response")
     planner = ScenePlanner(llm)
 
-    scenes = planner.build_scenes(
+    scene_plan = planner.build_scenes(
         narration_text="Some narration",
         video_prompt="Fallback visual direction",
         total_duration_seconds=9.0,
     )
+    scenes = scene_plan.scenes
 
     assert len(scenes) >= 3
     assert all(scene.prompt == "Fallback visual direction" for scene in scenes)
@@ -177,8 +181,14 @@ def test_generate_video_prompt_uses_llm_text() -> None:
         == "Positive"
     )
     assert '"has_foul_language"' in llm.prompts[0]
+    assert "80s/90s retro anime aesthetic" in llm.prompts[0]
     assert '"truthfulness"' in llm.prompts[1]
     assert '"speaker_sentiment"' in llm.prompts[1]
+    assert plan.prompts is not None
+    assert "video_prompt_generation" in plan.prompts
+    assert "analysis" in plan.prompts
+    assert '"has_foul_language"' in plan.prompts["video_prompt_generation"]
+    assert '"truthfulness"' in plan.prompts["analysis"]
 
 
 def test_generate_video_prompt_falls_back_when_llm_returns_blank() -> None:
@@ -190,8 +200,9 @@ def test_generate_video_prompt_falls_back_when_llm_returns_blank() -> None:
     )
 
     assert video_prompt.startswith(
-        "Cartoon style illustrated story sequence with a consistent protagonist"
+        "Cartoon style illustrated story sequence in an 80s/90s retro anime style"
     )
+    assert "Studio Ghibli and Makoto Shinkai-inspired artistry" in video_prompt
     assert "glowing valley at night" in video_prompt
 
 
@@ -248,7 +259,11 @@ def test_generate_video_prompt_enforces_cartoon_style_prefix_when_missing() -> N
 
     plan = planner.generate_video_prompt_plan(narration_text="Run quickly! Move now!")
 
-    assert plan.video_prompt.startswith("Cartoon style illustrated scene:")
+    assert plan.video_prompt.startswith(
+        "Cartoon style illustrated scene in 80s/90s retro anime style"
+    )
+    assert "Makoto Shinkai-inspired artistry" in plan.video_prompt
+    assert "camera-shake energy" in plan.video_prompt
     assert plan.preclassification is not None
     assert plan.preclassification.mood == "Tense"
     assert plan.preclassification.has_foul_language is True
@@ -276,6 +291,66 @@ def test_generate_video_prompt_enforces_cartoon_style_prefix_when_missing() -> N
         ].confidence_score
         == 1.0
     )
+
+
+def test_generate_video_prompt_appends_house_style_to_existing_cartoon_prompt() -> None:
+    llm = StubLLM(
+        [
+            json.dumps(
+                {
+                    "mood": "Hopeful",
+                    "has_foul_language": "No",
+                    "video_prompt": "cartoon style seaside reunion with two siblings under sunset clouds",
+                }
+            ),
+            json.dumps(
+                {
+                    "truthfulness": {
+                        "label": "MixedOrUnverifiable",
+                        "confidence_score": 0.5,
+                        "reason": "The transcript offers atmosphere without verifiable external evidence.",
+                    },
+                    "formality": {
+                        "label": "Mixed",
+                        "confidence_score": 0.5,
+                        "reason": "The transcript blends casual and descriptive phrasing.",
+                    },
+                    "certainty_hedging": {
+                        "label": "Balanced",
+                        "confidence_score": 0.5,
+                        "reason": "The wording is neither absolute nor heavily qualified.",
+                    },
+                    "persuasion_intent": {
+                        "label": "LowOrNone",
+                        "confidence_score": 0.5,
+                        "reason": "The speaker is describing rather than persuading.",
+                    },
+                    "claim_density": {
+                        "label": "Low",
+                        "confidence_score": 0.5,
+                        "reason": "The transcript contains few explicit factual claims.",
+                    },
+                    "speaker_sentiment": [
+                        {
+                            "speaker": "Unknown",
+                            "sentiment": "Positive",
+                            "confidence_score": 0.5,
+                            "reason": "The wording feels warm and optimistic.",
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    planner = ScenePlanner(llm)
+
+    plan = planner.generate_video_prompt_plan(
+        narration_text="Two siblings spot each other again near the ocean at dusk."
+    )
+
+    assert plan.video_prompt.startswith("cartoon style seaside reunion")
+    assert "80s/90s retro anime style" in plan.video_prompt
+    assert "Studio Ghibli and Makoto Shinkai-inspired artistry" in plan.video_prompt
 
 
 def test_generate_video_prompt_defaults_truthfulness_when_json_missing() -> None:

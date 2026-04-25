@@ -52,9 +52,22 @@ class InteractionStyleAssessment:
 class VideoPromptPlan:
     video_prompt: str
     preclassification: VideoPromptPreclassification | None
+    prompts: dict[str, str] | None = None
+
+
+@dataclass(slots=True)
+class ScenePlan:
+    scenes: list[Scene]
+    scene_prompt: str
 
 
 class ScenePlanner:
+    _GLOBAL_VIDEO_STYLE = (
+        "80s/90s retro anime aesthetic, vibrant colors, cel shading, detailed "
+        "illustration, sharp linework, dramatic composition, expressive characters, "
+        "subtle camera-shake energy, Studio Ghibli and Makoto Shinkai-inspired artistry"
+    )
+
     def __init__(self, llm: Any):
         self._llm = llm
 
@@ -64,11 +77,14 @@ class ScenePlanner:
         ).video_prompt
 
     def generate_video_prompt_plan(self, *, narration_text: str) -> VideoPromptPlan:
-        prompt = self._build_video_prompt_prompt(narration_text=narration_text)
-        raw = self._llm.generate_text(prompt)
-        payload = self._extract_json(raw)
-        truthfulness_assessment, interaction_style_assessment = self._classify_analysis(
+        video_prompt_prompt = self._build_video_prompt_prompt(
             narration_text=narration_text
+        )
+        raw = self._llm.generate_text(video_prompt_prompt)
+        payload = self._extract_json(raw)
+        analysis_prompt = self._build_analysis_prompt(narration_text=narration_text)
+        truthfulness_assessment, interaction_style_assessment = self._classify_analysis(
+            narration_text=narration_text, prompt=analysis_prompt
         )
 
         mood = self._normalize_mood(str(payload.get("mood", "")))
@@ -88,13 +104,19 @@ class ScenePlanner:
             interaction_style_assessment=interaction_style_assessment,
         )
         return VideoPromptPlan(
-            video_prompt=prompt_text, preclassification=preclassification
+            video_prompt=prompt_text,
+            preclassification=preclassification,
+            prompts={
+                "video_prompt_generation": video_prompt_prompt,
+                "analysis": analysis_prompt,
+            },
         )
 
     def _classify_analysis(
-        self, *, narration_text: str
+        self, *, narration_text: str, prompt: str | None = None
     ) -> tuple[TranscriptAssessment, InteractionStyleAssessment]:
-        prompt = self._build_analysis_prompt(narration_text=narration_text)
+        if prompt is None:
+            prompt = self._build_analysis_prompt(narration_text=narration_text)
         raw = self._llm.generate_text(prompt)
         payload = self._extract_json(raw)
 
@@ -157,15 +179,15 @@ class ScenePlanner:
         video_prompt: str,
         total_duration_seconds: float,
         max_scenes: int = 8,
-    ) -> list[Scene]:
+    ) -> ScenePlan:
         scene_count = max(3, min(max_scenes, math.ceil(total_duration_seconds / 4.5)))
-        prompt = self._build_prompt(
+        scene_prompt = self._build_prompt(
             narration_text=narration_text,
             video_prompt=video_prompt,
             total_duration_seconds=total_duration_seconds,
             scene_count=scene_count,
         )
-        raw = self._llm.generate_text(prompt)
+        raw = self._llm.generate_text(scene_prompt)
         payload = self._extract_json(raw)
         scene_payloads = payload.get("scenes", [])
         if not scene_payloads:
@@ -193,7 +215,7 @@ class ScenePlanner:
                 )
             )
             previous_scene_summary = summary or prompt_text
-        return scenes
+        return ScenePlan(scenes=scenes, scene_prompt=scene_prompt)
 
     def _split_narration(self, text: str, n: int) -> list[str]:
         """Split narration text into n roughly equal sentence-based chunks."""
@@ -263,10 +285,11 @@ Return valid JSON only with this exact schema:
 Constraints:
 - Answer classification concretely from the transcript.
 - video_prompt must be optimized for Stable Diffusion text-to-image generation.
-- video_prompt must be cartoon style only. No photorealistic, live-action, or real camera language.
+- video_prompt must produce a anime cartoon style image only. No photorealistic, live-action, or real camera language.
+- video_prompt must follow this fixed house style for every generated image: {self._GLOBAL_VIDEO_STYLE}.
 - video_prompt must describe recurring protagonist, environment, mood, lighting, palette, and stylized composition.
 - video_prompt must be one sentence and under 110 words.
-- Avoid text overlays, subtitles, logos, and watermarks.
+- DO NOT use text overlays, subtitles, logos, or watermarks.
 
 Narration or transcript:
 {narration_text}
@@ -310,8 +333,11 @@ Transcript:
         if len(snippet) > 220:
             snippet = snippet[:217].rstrip() + "..."
         return (
-            "Cartoon style illustrated story sequence with a consistent protagonist, "
-            f"expressive stylized lighting, and coherent environment continuity based on this narration: {snippet}"
+            "Cartoon style illustrated story sequence in an 80s/90s retro anime style, "
+            "with vibrant colors, cel shading, detailed illustration, sharp linework, "
+            "dramatic composition, expressive characters, subtle camera-shake energy, "
+            "and Studio Ghibli and Makoto Shinkai-inspired artistry, based on this narration: "
+            f"{snippet}"
         )
 
     def _extract_prompt_text(self, item: Any, *, fallback: str) -> str:
@@ -449,11 +475,39 @@ Transcript:
     def _enforce_cartoon_style(self, prompt_text: str) -> str:
         normalized = self._normalize_fragment(prompt_text)
         if not normalized:
-            return "Cartoon style illustrated fantasy scene with consistent character design"
+            return (
+                "Cartoon style illustrated fantasy scene in an 80s/90s retro anime style, "
+                "with vibrant colors, cel shading, detailed illustration, sharp linework, "
+                "dramatic composition, expressive characters, subtle camera-shake energy, "
+                "and Studio Ghibli and Makoto Shinkai-inspired artistry"
+            )
         lowered = normalized.lower()
-        if "cartoon" in lowered or "illustrated" in lowered or "anime" in lowered:
+        needs_prefix = not (
+            "cartoon" in lowered or "illustrated" in lowered or "anime" in lowered
+        )
+        needs_style = not all(
+            phrase in lowered
+            for phrase in (
+                "retro anime",
+                "vibrant",
+                "cel shading",
+                "sharp",
+                "dramatic composition",
+                "expressive characters",
+                "camera-shake",
+            )
+        )
+        if not needs_prefix and not needs_style:
             return normalized
-        return f"Cartoon style illustrated scene: {normalized}"
+
+        style_suffix = (
+            "80s/90s retro anime style, vibrant colors, cel shading, detailed "
+            "illustration, sharp linework, dramatic composition, expressive characters, "
+            "subtle camera-shake energy, Studio Ghibli and Makoto Shinkai-inspired artistry"
+        )
+        if needs_prefix:
+            return f"Cartoon style illustrated scene in {style_suffix}: {normalized}"
+        return f"{normalized}, {style_suffix}"
 
     def _extract_json(self, raw: str) -> dict[str, Any]:
         match = re.search(r"\{.*\}", raw, flags=re.DOTALL)

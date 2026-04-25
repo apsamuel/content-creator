@@ -38,6 +38,26 @@ content-creator --debug --llm-model mistralai/Mixtral-8x7B-Instruct-v0.1 from-te
 - Overrides the image generation model used for scene visuals.
 - Relevant for `from-text` and `from-audio`.
 
+## Hugging Face Resilience Environment Variables
+
+These environment variables apply to all Hugging Face inference calls (LLM, STT, TTS, moderation, image generation):
+
+- `HF_INFERENCE_MAX_RETRIES` (default `5`)
+- `HF_INFERENCE_BASE_DELAY_SECONDS` (default `1.0`)
+- `HF_INFERENCE_MAX_DELAY_SECONDS` (default `30.0`)
+- `HF_INFERENCE_JITTER_SECONDS` (default `0.35`)
+- `HF_INFERENCE_MIN_INTERVAL_SECONDS` (default `0.25`)
+
+The gateway retries on rate limits (`429`) and transient server/network errors using jittered exponential backoff, and it also spaces outbound requests to reduce burst throttling.
+
+## Image Generation Environment Variables
+
+- `HF_IMAGE_MODEL` selects the default image model when `-I/--image-model` is not passed.
+- `HF_IMAGE_NEGATIVE_PROMPT` sets the default negative prompt appended to every Hugging Face text-to-image request.
+- `CONTENT_CREATOR_WORK_DIR` controls where manifests, audio intermediates, and generated scene images are written.
+
+Use `HF_IMAGE_NEGATIVE_PROMPT` to suppress recurring artifacts globally instead of repeating negative terms in every scene prompt. The default preset targets blur, anatomy mistakes, duplicate limbs, text overlays, watermarks, borders, photorealism, flat lighting, and muddy colors.
+
 ## Startup Behavior
 
 For commands that build a pipeline (`from-text`, `from-audio`, `transcribe`), the CLI performs startup checks and prints active model and work directory information.

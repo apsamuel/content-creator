@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from content_creator.media import MediaAssembler
+from content_creator.media import AudioOverlayEvent
 from content_creator.planner import Scene
 
 
@@ -130,3 +131,49 @@ def test_chunk_audio_rejects_non_positive_chunk_size(tmp_path: Path) -> None:
             output_dir=tmp_path / "chunks",
             chunk_seconds=0,
         )
+
+
+def test_overlay_sound_effects_builds_filter_graph(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    assembler = MediaAssembler(width=1280, height=720, fps=24)
+    audio_path = tmp_path / "audio.wav"
+    sfx_path = tmp_path / "button.wav"
+    output_path = tmp_path / "censored.m4a"
+    audio_path.write_bytes(b"audio")
+    sfx_path.write_bytes(b"sfx")
+
+    calls: list[list[str]] = []
+
+    def _run(command, check, capture_output, text):
+        calls.append(command)
+        Path(command[-1]).write_bytes(b"rendered")
+        return Completed(stdout="")
+
+    monkeypatch.setattr(subprocess, "run", _run)
+
+    result = assembler.overlay_sound_effects(
+        audio_path=audio_path,
+        output_path=output_path,
+        events=[
+            AudioOverlayEvent(
+                start_seconds=0.4,
+                end_seconds=0.8,
+                sfx_path=sfx_path,
+                sfx_duration_seconds=0.2,
+                sfx_gain_db=2.5,
+            )
+        ],
+        duck_db=-16.0,
+    )
+
+    assert result == output_path
+    assert output_path.exists()
+    command = calls[0]
+    assert command[0] == "ffmpeg"
+    assert "-stream_loop" in command
+    assert command[command.index("-stream_loop") + 1] == "-1"
+    assert "-filter_complex" in command
+    filter_graph = command[command.index("-filter_complex") + 1]
+    assert "between(t,0.400,0.800)" in filter_graph
+    assert "adelay=400|400" in filter_graph

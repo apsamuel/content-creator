@@ -2,10 +2,20 @@ from __future__ import annotations
 
 import json
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 from content_creator.planner import Scene
+
+
+@dataclass(slots=True)
+class AudioOverlayEvent:
+    start_seconds: float
+    end_seconds: float
+    sfx_path: Path
+    sfx_duration_seconds: float
+    sfx_gain_db: float = 0.0
 
 
 class MediaAssembler:
@@ -141,6 +151,69 @@ class MediaAssembler:
             capture_output=True,
             text=True,
         )
+        return output_path
+
+    def overlay_sound_effects(
+        self,
+        *,
+        audio_path: Path,
+        output_path: Path,
+        events: list[AudioOverlayEvent],
+        duck_db: float,
+    ) -> Path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if not events:
+            output_path.write_bytes(audio_path.read_bytes())
+            return output_path
+
+        command: list[str] = ["ffmpeg", "-y", "-i", str(audio_path)]
+        for event in events:
+            command.extend(["-stream_loop", "-1", "-i", str(event.sfx_path)])
+
+        duck_gain = 10 ** (duck_db / 20.0)
+        filter_parts: list[str] = []
+
+        current_base = "[0:a]"
+        for index, event in enumerate(events, start=1):
+            next_base = f"[base_{index}]"
+            filter_parts.append(
+                f"{current_base}volume={duck_gain:.6f}:enable='between(t,{event.start_seconds:.3f},{event.end_seconds:.3f})'{next_base}"
+            )
+            current_base = next_base
+
+        overlay_labels: list[str] = []
+        for index, event in enumerate(events, start=1):
+            delay_ms = max(0, int(event.start_seconds * 1000))
+            label = f"[sfx_{index}]"
+            overlay_labels.append(label)
+            filter_parts.append(
+                f"[{index}:a]atrim=0:{event.sfx_duration_seconds:.3f},asetpts=PTS-STARTPTS,"
+                f"volume={event.sfx_gain_db:.2f}dB,adelay={delay_ms}|{delay_ms}{label}"
+            )
+
+        amix_inputs = current_base + "".join(overlay_labels)
+        filter_parts.append(
+            f"{amix_inputs}amix=inputs={1 + len(overlay_labels)}:normalize=0:dropout_transition=0[out]"
+        )
+
+        command.extend(
+            [
+                "-filter_complex",
+                ";".join(filter_parts),
+                "-map",
+                "[out]",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                str(output_path),
+            ]
+        )
+        subprocess.run(command, check=True, capture_output=True, text=True)
         return output_path
 
     def _render_scene_clip(

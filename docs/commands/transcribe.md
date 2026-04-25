@@ -33,6 +33,12 @@ Use `transcribe` when you only need transcript output, such as preparing script 
   - `--content-safety-filter / --no-content-safety-filter` (default `--no-content-safety-filter`)
   - `--content-safety-threshold FLOAT` (default `0.7`)
   - `--content-safety-model TEXT` (default `unitary/unbiased-toxic-roberta`)
+  - `--profanity-sfx / --no-profanity-sfx` (default `--no-profanity-sfx`)
+  - `--profanity-sfx-output FILE` (required when `--profanity-sfx` is enabled)
+  - `--profanity-sound-pack-dir DIR` (default bundled `src/content_creator/sound`)
+  - `--profanity-words-file FILE` (optional custom lexicon; default is bundled `data/profanity_words.txt`, with one word or phrase per line)
+  - `--profanity-pad-ms INTEGER` (default `80`)
+  - `--profanity-duck-db FLOAT` (default `-16.0`)
   - `--work-dir TEXT`
 
 ## Output behavior
@@ -41,8 +47,10 @@ Use `transcribe` when you only need transcript output, such as preparing script 
 - Without `--output`, transcript text is emitted directly to stdout.
 - With `--content-safety`, moderation labels are calculated for transcript text.
 - With both `--content-safety` and `--content-safety-filter`, flagged chunks are removed from output.
+- With `--profanity-sfx`, the command renders a second audio file where profane words are ducked and overlaid with effects.
 - Explicit speaker constraints (`--speaker-count` or `--min-speakers/--max-speakers`) disable automatic dominant-speaker collapse.
 - `--speaker-dominance-threshold` (or `HF_SPEAKER_DOMINANCE_THRESHOLD`) controls when automatic collapse triggers.
+- Word-level timestamp replacement requires an STT model that supports word timestamps (default `openai/whisper-large-v3` works).
 
 ## Mechanism Flow
 
@@ -110,6 +118,19 @@ content-creator transcribe \
   --content-safety-threshold 0.8 \
   --content-safety-model unitary/toxic-bert \
   --output ./output/meeting-safe.txt
+```
+
+Transcribe and render profanity-replaced audio with a custom sound pack:
+
+```bash
+content-creator transcribe \
+  --audio-file ./assets/meeting.m4a \
+  --profanity-sfx \
+  --profanity-sfx-output ./output/meeting-clean.m4a \
+  --profanity-sound-pack-dir ./src/content_creator/sound \
+  --profanity-pad-ms 120 \
+  --profanity-duck-db -12 \
+  --output ./output/meeting.txt
 ```
 
 ## Failure Modes to Expect

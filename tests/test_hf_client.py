@@ -112,6 +112,55 @@ def test_transcribe_audio_passes_bytes(
     assert kwargs["model"] == "stt/model"
 
 
+def test_transcribe_audio_with_word_timestamps_returns_words(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.hf_client as hf_module
+
+    monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
+    gateway = HuggingFaceGateway(_config(tmp_path))
+    audio_path = tmp_path / "sample.m4a"
+    audio_path.write_bytes(b"abc123")
+
+    def _asr(_inputs, **kwargs):
+        assert kwargs["model"] == "stt/model"
+        assert kwargs["extra_body"] == {"return_timestamps": "word"}
+        return {
+            "text": "hello world",
+            "chunks": [
+                {"text": "hello", "timestamp": [0.0, 0.4]},
+                {"text": "world", "timestamp": [0.4, 0.8]},
+            ],
+        }
+
+    gateway._client.automatic_speech_recognition = _asr
+
+    text, words = gateway.transcribe_audio_with_word_timestamps(audio_path)
+
+    assert text == "hello world"
+    assert [word.word for word in words] == ["hello", "world"]
+    assert words[0].start_seconds == pytest.approx(0.0)
+    assert words[1].end_seconds == pytest.approx(0.8)
+
+
+def test_transcribe_audio_with_word_timestamps_raises_when_missing_chunks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.hf_client as hf_module
+
+    monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
+    gateway = HuggingFaceGateway(_config(tmp_path))
+    audio_path = tmp_path / "sample.m4a"
+    audio_path.write_bytes(b"abc123")
+
+    gateway._client.automatic_speech_recognition = lambda _inputs, **_kwargs: {
+        "text": "hello world"
+    }
+
+    with pytest.raises(RuntimeError, match="Word-level timestamps are unavailable"):
+        gateway.transcribe_audio_with_word_timestamps(audio_path)
+
+
 def test_classify_content_safety_uses_requested_model_and_parses_scores(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -145,6 +194,24 @@ def test_generate_image_raises_for_non_image(
 
     with pytest.raises(TypeError, match="Expected a PIL image"):
         gateway.generate_image("prompt", tmp_path / "x.png")
+
+
+def test_generate_image_passes_negative_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.hf_client as hf_module
+
+    monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
+    gateway = HuggingFaceGateway(_config(tmp_path))
+    destination = tmp_path / "image.png"
+
+    result = gateway.generate_image("prompt", destination)
+
+    assert result == destination
+    prompt, kwargs = gateway._client.calls["text_to_image"]
+    assert prompt == "prompt"
+    assert kwargs["model"] == "image/model"
+    assert kwargs["negative_prompt"] == gateway._config.image_negative_prompt
 
 
 def test_transcribe_audio_with_speakers_uses_diarization_segments(
@@ -578,3 +645,76 @@ def test_transcribe_audio_with_speakers_raises_helpful_error_for_gated_models(
 
     with pytest.raises(RuntimeError, match="could not access required pyannote models"):
         gateway.transcribe_audio_with_speakers(source_audio)
+
+
+def test_generate_text_retries_on_http_429_with_retry_after_header(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.hf_client as hf_module
+
+    monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
+    monkeypatch.setenv("HF_INFERENCE_MAX_RETRIES", "2")
+
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(hf_module, "sleep", lambda value: sleep_calls.append(value))
+
+    gateway = HuggingFaceGateway(_config(tmp_path))
+
+    class _Response:
+        status_code = 429
+        headers = {"Retry-After": "1.25"}
+
+    class _RateLimitError(Exception):
+        def __init__(self):
+            super().__init__("429 Too Many Requests")
+            self.response = _Response()
+
+    attempts = {"count": 0}
+
+    def _flaky_chat(*args, **kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise _RateLimitError()
+
+        class _Message:
+            content = "eventual success"
+
+        class _Choice:
+            message = _Message()
+
+        class _Output:
+            choices = [_Choice()]
+
+        return _Output()
+
+    gateway._client.chat_completion = _flaky_chat
+
+    text = gateway.generate_text("hello")
+
+    assert text == "eventual success"
+    assert attempts["count"] == 2
+    assert sleep_calls
+    assert sleep_calls[0] >= 1.25
+
+
+def test_generate_text_raises_after_retry_budget_exhausted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.hf_client as hf_module
+
+    monkeypatch.setattr(hf_module, "InferenceClient", FakeInferenceClient)
+    monkeypatch.setenv("HF_INFERENCE_MAX_RETRIES", "1")
+    monkeypatch.setattr(hf_module, "sleep", lambda _value: None)
+
+    gateway = HuggingFaceGateway(_config(tmp_path))
+
+    class _ServerError(Exception):
+        status_code = 503
+
+    def _always_fails(*args, **kwargs):
+        raise _ServerError("service unavailable")
+
+    gateway._client.chat_completion = _always_fails
+
+    with pytest.raises(RuntimeError, match="failed after 2 attempts"):
+        gateway.generate_text("hello")

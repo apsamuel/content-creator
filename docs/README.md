@@ -9,6 +9,7 @@ This directory contains detailed, command-level documentation for the content-cr
 - [from-audio command](commands/from-audio.md)
 - [transcribe command](commands/transcribe.md)
 - [doctor command](commands/doctor.md)
+- [lexicon-doctor command](commands/lexicon-doctor.md)
 
 ## How to use these docs
 

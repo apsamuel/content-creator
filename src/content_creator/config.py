@@ -5,6 +5,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+DEFAULT_IMAGE_NEGATIVE_PROMPT = (
+    "blurry, lowres, low detail, soft focus, bad anatomy, bad hands, extra fingers, "
+    "missing fingers, extra limbs, duplicate subjects, deformed face, cross-eyed, "
+    "text, subtitles, watermark, logo, border, frame, photorealistic, live action, "
+    "flat lighting, muddy colors"
+)
+
+
 @dataclass(slots=True)
 class ModelConfig:
     llm_model: str = "meta-llama/Llama-3.1-8B-Instruct"
@@ -23,6 +31,7 @@ class AppConfig:
     width: int = 1280
     height: int = 720
     fps: int = 24
+    image_negative_prompt: str = DEFAULT_IMAGE_NEGATIVE_PROMPT
 
     @classmethod
     def from_env(
@@ -67,4 +76,13 @@ class AppConfig:
                 image_model, "HF_IMAGE_MODEL", defaults.image_model
             ),
         )
-        return cls(hf_token=token, work_dir=base_dir, models=models)
+        image_negative_prompt = (
+            os.getenv("HF_IMAGE_NEGATIVE_PROMPT", "").strip()
+            or DEFAULT_IMAGE_NEGATIVE_PROMPT
+        )
+        return cls(
+            hf_token=token,
+            work_dir=base_dir,
+            models=models,
+            image_negative_prompt=image_negative_prompt,
+        )

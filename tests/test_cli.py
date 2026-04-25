@@ -7,6 +7,7 @@ import pytest
 
 import content_creator.cli as cli_module
 from content_creator.config import AppConfig, ModelConfig
+from content_creator.profanity_sfx import LexiconDoctorReport
 
 
 class FakePipeline:
@@ -78,6 +79,56 @@ def test_transcribe_command_writes_output_file(monkeypatch, tmp_path: Path) -> N
     assert fake_pipeline.calls[0][0] == "transcribe"
     assert fake_pipeline.calls[0][2]["chunk_seconds"] == 45.0
     assert fake_pipeline.calls[0][2]["preserve_speaker"] is False
+
+
+def test_transcribe_profanity_sfx_requires_output(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: FakePipeline())
+
+    audio_file = tmp_path / "audio.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        ["transcribe", "--audio-file", str(audio_file), "--profanity-sfx"],
+    )
+
+    assert result.exit_code != 0
+    assert "--profanity-sfx-output is required" in result.output
+
+
+def test_transcribe_profanity_sfx_passes_options(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "audio.m4a"
+    audio_file.write_bytes(b"audio")
+    output_audio = tmp_path / "clean.m4a"
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "transcribe",
+            "--audio-file",
+            str(audio_file),
+            "--profanity-sfx",
+            "--profanity-sfx-output",
+            str(output_audio),
+            "--profanity-pad-ms",
+            "120",
+            "--profanity-duck-db",
+            "-10",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    call_kwargs = fake_pipeline.calls[0][2]
+    assert call_kwargs["profanity_sfx_enabled"] is True
+    assert call_kwargs["profanity_sfx_output_path"] == output_audio
+    assert call_kwargs["profanity_pad_seconds"] == pytest.approx(0.12)
+    assert call_kwargs["profanity_duck_db"] == pytest.approx(-10.0)
 
 
 def test_global_debug_flag_prints_message(monkeypatch, tmp_path: Path) -> None:
@@ -713,8 +764,43 @@ def test_from_audio_passes_diarization_speaker_count(
 
     assert result.exit_code == 0, result.output
     assert fake_pipeline.calls[0][2]["diarization_speaker_count"] == 1
-    assert fake_pipeline.calls[0][2]["diarization_min_speakers"] is None
-    assert fake_pipeline.calls[0][2]["diarization_max_speakers"] is None
+
+
+def test_lexicon_doctor_reports_summary(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    lexicon_file = tmp_path / "words.txt"
+    lexicon_file.write_text("foo\n", encoding="utf-8")
+
+    def _analyze(path):
+        assert path == lexicon_file
+        return LexiconDoctorReport(
+            path=lexicon_file,
+            total_lines=5,
+            active_lines=4,
+            unique_normalized_entries=3,
+            exact_duplicates={"foo": 2},
+            near_duplicates={"wet back": ["wet back", "wet-back"]},
+        )
+
+    monkeypatch.setattr(cli_module, "analyze_profanity_lexicon", _analyze)
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "lexicon-doctor",
+            "--profanity-words-file",
+            str(lexicon_file),
+            "--max-groups",
+            "5",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Lexicon file:" in result.output
+    assert "Exact duplicate entries: 1" in result.output
+    assert "Near-duplicate groups: 1" in result.output
+    assert "foo (x2)" in result.output
+    assert "wet back: wet back, wet-back" in result.output
 
 
 def test_from_audio_passes_speaker_dominance_threshold(

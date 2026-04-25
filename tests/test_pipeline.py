@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import types
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from content_creator.config import AppConfig, ModelConfig
 from content_creator.planner import (
     InteractionStyleAssessment,
     Scene,
+    ScenePlan,
     SpeakerSentimentAssessment,
     TranscriptAssessment,
     VideoPromptPlan,
@@ -31,6 +33,16 @@ class FakeGateway:
 
     def transcribe_audio(self, audio_path: Path) -> str:
         return f"transcribed {audio_path.stem}"
+
+    def transcribe_audio_with_word_timestamps(self, audio_path: Path):
+        return (
+            "hello damn world",
+            [
+                types.SimpleNamespace(word="hello", start_seconds=0.0, end_seconds=0.3),
+                types.SimpleNamespace(word="damn", start_seconds=0.4, end_seconds=0.6),
+                types.SimpleNamespace(word="world", start_seconds=0.7, end_seconds=1.0),
+            ],
+        )
 
     def transcribe_audio_with_speakers(
         self,
@@ -139,10 +151,13 @@ class FakePlanner:
         max_scenes: int = 8,
     ):
         self.calls.append((narration_text, video_prompt, total_duration_seconds))
-        return [
-            Scene(index=1, prompt="Prompt A", duration_seconds=2.5),
-            Scene(index=2, prompt="Prompt B", duration_seconds=2.5),
-        ]
+        return ScenePlan(
+            scenes=[
+                Scene(index=1, prompt="Prompt A", duration_seconds=2.5),
+                Scene(index=2, prompt="Prompt B", duration_seconds=2.5),
+            ],
+            scene_prompt="fake scene prompt",
+        )
 
 
 class FakeMedia:
@@ -169,6 +184,13 @@ class FakeMedia:
     ) -> Path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"video")
+        return output_path
+
+    def overlay_sound_effects(
+        self, *, audio_path: Path, output_path: Path, events, duck_db: float
+    ) -> Path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"censored")
         return output_path
 
 
@@ -254,6 +276,78 @@ def test_generate_from_text_writes_manifest(
     assert manifest["video_prompt_preclassification"] is None
     assert len(manifest["scenes"]) == 2
     assert any(msg.startswith("🐛 Rendering image for scene") for msg in statuses)
+
+
+def test_generate_from_audio_applies_profanity_sfx_when_enabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    sound_dir = tmp_path / "sound"
+    sound_dir.mkdir(parents=True, exist_ok=True)
+    (sound_dir / "button.wav").write_bytes(b"sound")
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "load_sound_pack",
+        lambda sound_pack_dir: types.SimpleNamespace(
+            name="test-pack",
+            root_dir=sound_pack_dir,
+            target_mean_db=-18.0,
+            assets=[
+                types.SimpleNamespace(
+                    path=sound_pack_dir / "button.wav",
+                    duration_seconds=0.2,
+                    mean_volume_db=-20.0,
+                    max_volume_db=-5.0,
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(pipeline_module, "load_profanity_words", lambda _path: {"damn"})
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_profanity_sfx_plan",
+        lambda **_kwargs: types.SimpleNamespace(
+            sound_pack_name="test-pack",
+            sound_pack_dir=sound_dir,
+            total_words=3,
+            matches_found=1,
+            events=[
+                types.SimpleNamespace(
+                    word="damn",
+                    start_seconds=0.32,
+                    end_seconds=0.68,
+                    sfx_path=sound_dir / "button.wav",
+                    sfx_duration_seconds=0.2,
+                    sfx_gain_db=2.0,
+                )
+            ],
+        ),
+    )
+
+    pipeline = VideoGenerationPipeline(_config(tmp_path))
+    audio_path = tmp_path / "input.m4a"
+    audio_path.write_bytes(b"audio")
+    output_path = tmp_path / "out" / "video.mp4"
+
+    pipeline.generate_from_audio(
+        audio_path=audio_path,
+        video_prompt="style",
+        output_path=output_path,
+        profanity_sfx_enabled=True,
+        profanity_sound_pack_dir=sound_dir,
+    )
+
+    manifest_path = _config(tmp_path).work_dir / output_path.stem / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["profanity_sfx"]["events_applied"] == 1
+    assert "audio_censored.m4a" in manifest["profanity_sfx"]["output_audio"]
 
 
 def test_generate_from_text_uses_threaded_image_workers(

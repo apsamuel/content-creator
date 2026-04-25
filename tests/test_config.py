@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from content_creator.config import AppConfig
+from content_creator.config import AppConfig, DEFAULT_IMAGE_NEGATIVE_PROMPT
 
 
 def test_from_env_requires_hf_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -42,6 +42,17 @@ def test_from_env_reads_model_overrides(
     assert config.models.stt_model == "stt/custom"
     assert config.models.tts_model == "tts/custom"
     assert config.models.image_model == "img/custom"
+
+
+def test_from_env_reads_image_negative_prompt_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "token-xyz")
+    monkeypatch.setenv("HF_IMAGE_NEGATIVE_PROMPT", "blurry, watermark, extra fingers")
+
+    config = AppConfig.from_env(work_dir=tmp_path)
+
+    assert config.image_negative_prompt == "blurry, watermark, extra fingers"
 
 
 def test_from_env_prefers_explicit_model_args(
@@ -86,3 +97,4 @@ def test_from_env_uses_builtin_model_defaults_when_env_missing(
     assert config.models.stt_model == "openai/whisper-large-v3"
     assert config.models.tts_model == "hexgrad/Kokoro-82M"
     assert config.models.image_model == "stabilityai/stable-diffusion-xl-base-1.0"
+    assert config.image_negative_prompt == DEFAULT_IMAGE_NEGATIVE_PROMPT

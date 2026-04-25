@@ -13,8 +13,13 @@ from uuid import uuid4
 
 from content_creator.config import AppConfig
 from content_creator.hf_client import HuggingFaceGateway
-from content_creator.media import MediaAssembler
-from content_creator.planner import ScenePlanner, VideoPromptPlan
+from content_creator.media import AudioOverlayEvent, MediaAssembler
+from content_creator.planner import ScenePlanner, ScenePlan, VideoPromptPlan
+from content_creator.profanity_sfx import (
+    build_profanity_sfx_plan,
+    load_profanity_words,
+    load_sound_pack,
+)
 
 
 def wrap_transcription(text: str, *, width: int = 100) -> str:
@@ -116,6 +121,11 @@ class VideoGenerationPipeline:
         content_safety_filter: bool = False,
         content_safety_threshold: float = 0.7,
         content_safety_model: str | None = None,
+        profanity_sfx_enabled: bool = False,
+        profanity_sound_pack_dir: Path | None = None,
+        profanity_words_file: Path | None = None,
+        profanity_pad_seconds: float = 0.08,
+        profanity_duck_db: float = -16.0,
         transcribe_workers: int = 1,
         image_workers: int = 1,
         view_preclassification: bool = False,
@@ -139,6 +149,15 @@ class VideoGenerationPipeline:
             "content_safety_filter": content_safety_filter,
             "content_safety_threshold": content_safety_threshold,
             "content_safety_model": content_safety_model,
+            "profanity_sfx_enabled": profanity_sfx_enabled,
+            "profanity_sound_pack_dir": (
+                str(profanity_sound_pack_dir) if profanity_sound_pack_dir else None
+            ),
+            "profanity_words_file": (
+                str(profanity_words_file) if profanity_words_file else None
+            ),
+            "profanity_pad_seconds": profanity_pad_seconds,
+            "profanity_duck_db": profanity_duck_db,
             "transcribe_workers": transcribe_workers,
             "image_workers": image_workers,
             "generate_video_prompt": generate_video_prompt,
@@ -173,12 +192,29 @@ class VideoGenerationPipeline:
         duration = self._media.get_audio_duration(audio_path)
         manifest["duration_seconds"] = duration
         manifest["status"] = "duration_measured"
+
+        audio_for_render = audio_path
+        if profanity_sfx_enabled:
+            self._status("🤖 Building profanity replacement plan from word timestamps")
+            censored_audio_path = run_dir / "audio_censored.m4a"
+            censorship_report = self._apply_profanity_sound_effects(
+                source_audio=audio_path,
+                output_audio=censored_audio_path,
+                sound_pack_dir=profanity_sound_pack_dir,
+                profanity_words_file=profanity_words_file,
+                pad_seconds=profanity_pad_seconds,
+                duck_db=profanity_duck_db,
+            )
+            manifest["profanity_sfx"] = censorship_report
+            if bool(censorship_report.get("events_applied", 0)):
+                audio_for_render = censored_audio_path
+
         self._write_manifest(run_dir, manifest)
         return self._render_project(
             narration_text=transcript,
             video_prompt=video_prompt,
             generate_video_prompt=generate_video_prompt,
-            audio_path=audio_path,
+            audio_path=audio_for_render,
             duration_seconds=duration,
             output_path=output_path,
             run_dir=run_dir,
@@ -202,6 +238,12 @@ class VideoGenerationPipeline:
         content_safety_filter: bool = False,
         content_safety_threshold: float = 0.7,
         content_safety_model: str | None = None,
+        profanity_sfx_enabled: bool = False,
+        profanity_sfx_output_path: Path | None = None,
+        profanity_sound_pack_dir: Path | None = None,
+        profanity_words_file: Path | None = None,
+        profanity_pad_seconds: float = 0.08,
+        profanity_duck_db: float = -16.0,
         transcribe_workers: int = 1,
     ) -> str:
         transcript = self._transcribe_with_optional_chunking(
@@ -220,12 +262,97 @@ class VideoGenerationPipeline:
             transcribe_workers=transcribe_workers,
         )
         self._emit_content_safety_summary()
+        if profanity_sfx_enabled:
+            if profanity_sfx_output_path is None:
+                raise ValueError(
+                    "profanity_sfx_output_path is required when profanity_sfx_enabled is true"
+                )
+            self._status("🤖 Building profanity replacement plan from word timestamps")
+            report = self._apply_profanity_sound_effects(
+                source_audio=audio_path,
+                output_audio=profanity_sfx_output_path,
+                sound_pack_dir=profanity_sound_pack_dir,
+                profanity_words_file=profanity_words_file,
+                pad_seconds=profanity_pad_seconds,
+                duck_db=profanity_duck_db,
+            )
+            self._status(
+                "✅ Profanity SFX output written "
+                f"({report.get('events_applied', 0)} replacements): {profanity_sfx_output_path}"
+            )
         if output_path is not None:
             self._status("💾 Writing transcript to disk")
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(wrap_transcription(transcript), encoding="utf-8")
         self._status("✅ Transcription complete")
         return transcript
+
+    def _apply_profanity_sound_effects(
+        self,
+        *,
+        source_audio: Path,
+        output_audio: Path,
+        sound_pack_dir: Path | None,
+        profanity_words_file: Path | None,
+        pad_seconds: float,
+        duck_db: float,
+    ) -> dict[str, object]:
+        default_sound_dir = Path(__file__).resolve().parent / "sound"
+        resolved_sound_dir = (
+            sound_pack_dir.expanduser().resolve()
+            if sound_pack_dir
+            else default_sound_dir
+        )
+
+        transcript_text, timed_words = (
+            self._gateway.transcribe_audio_with_word_timestamps(source_audio)
+        )
+        sound_pack = load_sound_pack(sound_pack_dir=resolved_sound_dir)
+        profanity_words = load_profanity_words(profanity_words_file)
+        plan = build_profanity_sfx_plan(
+            timed_words=timed_words,
+            sound_pack=sound_pack,
+            profanity_words=profanity_words,
+            pad_seconds=pad_seconds,
+        )
+
+        events = [
+            AudioOverlayEvent(
+                start_seconds=event.start_seconds,
+                end_seconds=event.end_seconds,
+                sfx_path=event.sfx_path,
+                sfx_duration_seconds=event.sfx_duration_seconds,
+                sfx_gain_db=event.sfx_gain_db,
+            )
+            for event in plan.events
+        ]
+        self._media.overlay_sound_effects(
+            audio_path=source_audio,
+            output_path=output_audio,
+            events=events,
+            duck_db=duck_db,
+        )
+        return {
+            "enabled": True,
+            "sound_pack": plan.sound_pack_name,
+            "sound_pack_dir": str(plan.sound_pack_dir),
+            "transcript_text_length": len(transcript_text),
+            "total_words": plan.total_words,
+            "matches_found": plan.matches_found,
+            "events_applied": len(plan.events),
+            "output_audio": str(output_audio),
+            "events": [
+                {
+                    "word": event.word,
+                    "start_seconds": event.start_seconds,
+                    "end_seconds": event.end_seconds,
+                    "sfx": str(event.sfx_path),
+                    "sfx_duration_seconds": event.sfx_duration_seconds,
+                    "sfx_gain_db": event.sfx_gain_db,
+                }
+                for event in plan.events
+            ],
+        }
 
     def _render_project(
         self,
@@ -318,11 +445,19 @@ class VideoGenerationPipeline:
         manifest["status"] = "planning_scenes"
         self._write_manifest(run_dir, manifest)
         self._status("🧠 Planning scenes from narration")
-        scenes = self._planner.build_scenes(
+        scene_plan = self._planner.build_scenes(
             narration_text=narration_text,
             video_prompt=resolved_video_prompt,
             total_duration_seconds=duration_seconds,
         )
+        scenes = scene_plan.scenes
+        if video_prompt_plan.prompts is not None:
+            manifest["llm_prompts"] = {
+                **video_prompt_plan.prompts,
+                "scene_planning": scene_plan.scene_prompt,
+            }
+        else:
+            manifest["llm_prompts"] = {"scene_planning": scene_plan.scene_prompt}
         manifest["scenes"] = [asdict(scene) for scene in scenes]
         manifest["status"] = "scenes_planned"
         self._write_manifest(run_dir, manifest)

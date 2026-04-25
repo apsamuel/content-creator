@@ -38,6 +38,11 @@ Use `from-audio` when you already have narration audio and want matching visuals
   - `--content-safety-filter / --no-content-safety-filter` (default `--no-content-safety-filter`)
   - `--content-safety-threshold FLOAT` (default `0.7`)
   - `--content-safety-model TEXT` (default `unitary/unbiased-toxic-roberta`)
+  - `--profanity-sfx / --no-profanity-sfx` (default `--no-profanity-sfx`)
+  - `--profanity-sound-pack-dir DIR` (default bundled `src/content_creator/sound`)
+  - `--profanity-words-file FILE` (optional custom lexicon; default is bundled `data/profanity_words.txt`, with one word or phrase per line)
+  - `--profanity-pad-ms INTEGER` (default `80`)
+  - `--profanity-duck-db FLOAT` (default `-16.0`)
   - `--work-dir TEXT`
 
 ## STT and diarization behavior
@@ -50,6 +55,7 @@ Use `from-audio` when you already have narration audio and want matching visuals
 - `--speaker-dominance-threshold` (or `HF_SPEAKER_DOMINANCE_THRESHOLD`) controls when automatic collapse triggers.
 - If `--content-safety` is enabled, transcript text is labeled for unsafe content.
 - If `--content-safety-filter` is also enabled, flagged chunks are dropped before scene planning.
+- If `--profanity-sfx` is enabled, word-level timestamps are used to replace profane words in final audio with effects from the selected sound pack.
 
 ## Mechanism Flow
 
@@ -124,6 +130,19 @@ content-creator from-audio \
   --content-safety-threshold 0.8 \
   --content-safety-model unitary/toxic-bert \
   --output ./output/filtered.mp4
+```
+
+Apply profanity replacement with a custom sound pack:
+
+```bash
+content-creator from-audio \
+  --audio-file ./assets/voiceover.mp3 \
+  --generate-video-prompt \
+  --profanity-sfx \
+  --profanity-sound-pack-dir ./src/content_creator/sound \
+  --profanity-pad-ms 100 \
+  --profanity-duck-db -14 \
+  --output ./output/voiceover-clean.mp4
 ```
 
 ## Failure Modes to Expect

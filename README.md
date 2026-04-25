@@ -12,6 +12,7 @@ The tool is designed around two primary operating modes:
 There is also a focused utility command:
 
 1. `transcribe`: transcribes an audio file only, with optional ffmpeg chunking for better STT quality on long files.
+2. `lexicon-doctor`: audits profanity lexicon files for duplicate and near-duplicate entries.
 
 This gives you a single CLI that uses:
 
@@ -21,6 +22,7 @@ This gives you a single CLI that uses:
 - stable diffusion for image generation
 - optional speaker diarization for speaker-labeled transcripts
 - optional content safety labeling/filtering on transcribed audio or chunks
+- optional profanity replacement with cute sound effects using word timestamps
 
 ## Requirements
 
@@ -35,9 +37,13 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 cp examples/envrc.example .envrc
-export $(grep -v '^#' .env | xargs)
+set -a
+source .envrc
+set +a
 
 ```
+
+`HF_IMAGE_NEGATIVE_PROMPT` in `.envrc` controls the default negative prompt passed to Hugging Face image generation. Use it to suppress recurring artifacts such as blur, anatomy errors, watermarks, text overlays, flat lighting, muddy colors, or unwanted photorealism.
 
 ## Commands
 
@@ -48,6 +54,7 @@ Detailed command documentation with flowcharts is available in [docs/README.md](
 - [from-audio command](docs/commands/from-audio.md)
 - [transcribe command](docs/commands/transcribe.md)
 - [doctor command](docs/commands/doctor.md)
+- [lexicon-doctor command](docs/commands/lexicon-doctor.md)
 
 Generate a video from text and a visual prompt:
 
@@ -115,6 +122,41 @@ content-creator transcribe \
   --output ./renders/voiceover-safe.txt
 ```
 
+Profanity SFX replacement options:
+
+- `--profanity-sfx` enables timestamped profanity detection and replacement.
+- `--profanity-sound-pack-dir` points to a folder of effect files (`wav`, `mp3`, `m4a`, `flac`, `ogg`).
+- `--profanity-words-file` overrides the bundled `data/profanity_words.txt` lexicon. Each line can be a single word or a multi-word phrase.
+- `--profanity-pad-ms` adds timing padding around each detected word.
+- `--profanity-duck-db` controls source-audio ducking while the SFX plays.
+
+Example for `from-audio` (replacement is embedded into final video audio):
+
+```bash
+content-creator from-audio \
+  --audio-file ./assets/voiceover.mp3 \
+  --generate-video-prompt \
+  --profanity-sfx \
+  --profanity-sound-pack-dir ./src/content_creator/sound \
+  --output ./renders/voiceover-clean.mp4
+```
+
+Example for `transcribe` (requires explicit audio output path):
+
+```bash
+content-creator transcribe \
+  --audio-file ./assets/voiceover.mp3 \
+  --profanity-sfx \
+  --profanity-sfx-output ./renders/voiceover-clean.m4a \
+  --output ./renders/voiceover.txt
+```
+
+Notes for timestamped profanity replacement:
+
+- Word-level timestamps depend on STT model capability. `openai/whisper-large-v3` supports this flow.
+- No additional model is required by default if you keep the current STT default.
+- `ffmpeg` and `ffprobe` remain required for audio analysis and rendering.
+
 Hugging Face model families you can evaluate for safety labeling/filtering:
 
 - Toxicity / abuse classifiers: `unitary/unbiased-toxic-roberta`, `unitary/toxic-bert`
@@ -129,6 +171,22 @@ Requirements for `--preserve-speaker`:
 - Accept model terms on Hugging Face for `pyannote/speaker-diarization-3.1` (and any dependent pyannote model pages)
 - Ensure `HF_TOKEN` has access to those gated models
 - Optional: set `HF_DIARIZATION_MODEL` to override the diarization model
+
+Hugging Face inference reliability controls (all optional, with safe defaults):
+
+- `HF_INFERENCE_MAX_RETRIES` (default: `5`) controls retry attempts after the first request.
+- `HF_INFERENCE_BASE_DELAY_SECONDS` (default: `1.0`) sets the initial exponential backoff delay.
+- `HF_INFERENCE_MAX_DELAY_SECONDS` (default: `30.0`) caps per-retry wait time.
+- `HF_INFERENCE_JITTER_SECONDS` (default: `0.35`) adds random jitter to reduce synchronized retries.
+- `HF_INFERENCE_MIN_INTERVAL_SECONDS` (default: `0.25`) enforces a minimum gap between outbound HF requests.
+
+These apply to chat completion, STT, TTS, moderation, and image generation calls.
+
+Image generation environment variables:
+
+- `HF_IMAGE_MODEL` selects the Hugging Face image model.
+- `HF_IMAGE_NEGATIVE_PROMPT` sets the default negative prompt applied to every generated image request.
+- `CONTENT_CREATOR_WORK_DIR` controls where intermediate assets and manifests are written.
 
 Enable debug mode (emoji status + verbose chunk progress + full tracebacks):
 
