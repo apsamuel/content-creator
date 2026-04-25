@@ -11,17 +11,18 @@ DEFAULT_IMAGE_NEGATIVE_PROMPT = (
     "text, subtitles, watermark, logo, border, frame, photorealistic, live action, "
     "flat lighting, muddy colors"
 )
+
 DEFAULT_IMAGE_COMPOSITION_MODE = "balanced"
 
 
 @dataclass(slots=True)
 class ModelConfig:
-    llm_model: str = "meta-llama/Llama-3.1-8B-Instruct"
+    llm_model: str = "meta-llama/Llama-3.3-70B-Instruct"
     stt_model: str = "openai/whisper-large-v3"
     tts_model: str = "hexgrad/Kokoro-82M"
     safety_model: str = "unitary/unbiased-toxic-roberta"
     diarization_model: str = "pyannote/speaker-diarization-3.1"
-    image_model: str = "stabilityai/stable-diffusion-xl-base-1.0"
+    image_model: str = "black-forest-labs/FLUX.1-dev"
 
 
 @dataclass(slots=True)

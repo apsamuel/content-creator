@@ -42,7 +42,7 @@ Use `from-audio` when you already have narration audio and want matching visuals
   - `--profanity-sound-pack-dir DIR` (default bundled `src/content_creator/sound`)
   - `--profanity-words-file FILE` (optional custom lexicon; default is bundled `data/profanity_words.txt`, with one word or phrase per line)
   - `--profanity-pad-ms INTEGER` (default `80`)
-  - `--profanity-duck-db FLOAT` (default `-16.0`)
+  - `--profanity-duck-db FLOAT` (default `-42.0`)
   - `--work-dir TEXT`
 
 ## STT and diarization behavior
@@ -141,7 +141,7 @@ content-creator from-audio \
   --profanity-sfx \
   --profanity-sound-pack-dir ./src/content_creator/sound \
   --profanity-pad-ms 100 \
-  --profanity-duck-db -14 \
+  --profanity-duck-db -42 \
   --output ./output/voiceover-clean.mp4
 ```
 

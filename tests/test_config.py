@@ -8,6 +8,7 @@ from content_creator.config import (
     AppConfig,
     DEFAULT_IMAGE_COMPOSITION_MODE,
     DEFAULT_IMAGE_NEGATIVE_PROMPT,
+    ModelConfig,
 )
 
 
@@ -118,9 +119,10 @@ def test_from_env_uses_builtin_model_defaults_when_env_missing(
     assert isinstance(config.models.stt_model, str)
     assert isinstance(config.models.tts_model, str)
     assert isinstance(config.models.image_model, str)
-    assert config.models.llm_model == "meta-llama/Llama-3.1-8B-Instruct"
-    assert config.models.stt_model == "openai/whisper-large-v3"
-    assert config.models.tts_model == "hexgrad/Kokoro-82M"
-    assert config.models.image_model == "stabilityai/stable-diffusion-xl-base-1.0"
+    defaults = ModelConfig()
+    assert config.models.llm_model == defaults.llm_model
+    assert config.models.stt_model == defaults.stt_model
+    assert config.models.tts_model == defaults.tts_model
+    assert config.models.image_model == defaults.image_model
     assert config.image_negative_prompt == DEFAULT_IMAGE_NEGATIVE_PROMPT
     assert config.image_composition_mode == DEFAULT_IMAGE_COMPOSITION_MODE

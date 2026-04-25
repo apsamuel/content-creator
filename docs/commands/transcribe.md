@@ -38,7 +38,7 @@ Use `transcribe` when you only need transcript output, such as preparing script 
   - `--profanity-sound-pack-dir DIR` (default bundled `src/content_creator/sound`)
   - `--profanity-words-file FILE` (optional custom lexicon; default is bundled `data/profanity_words.txt`, with one word or phrase per line)
   - `--profanity-pad-ms INTEGER` (default `80`)
-  - `--profanity-duck-db FLOAT` (default `-16.0`)
+  - `--profanity-duck-db FLOAT` (default `-42.0`)
   - `--work-dir TEXT`
 
 ## Output behavior
@@ -129,7 +129,7 @@ content-creator transcribe \
   --profanity-sfx-output ./output/meeting-clean.m4a \
   --profanity-sound-pack-dir ./src/content_creator/sound \
   --profanity-pad-ms 120 \
-  --profanity-duck-db -12 \
+  --profanity-duck-db -42 \
   --output ./output/meeting.txt
 ```
 

@@ -459,10 +459,13 @@ def from_text(
 )
 @click.option(
     "--profanity-duck-db",
-    default=-16.0,
+    default=-42.0,
     show_default=True,
     type=float,
-    help="Volume reduction (dB) applied to source audio during profanity windows.",
+    help=(
+        "Volume reduction (dB) applied to source audio during profanity windows; "
+        "defaults to near-muting under the replacement SFX."
+    ),
 )
 @click.option("--work-dir", default=None, help="Directory for intermediate assets.")
 @click.option(
@@ -688,10 +691,13 @@ def from_audio(
 )
 @click.option(
     "--profanity-duck-db",
-    default=-16.0,
+    default=-42.0,
     show_default=True,
     type=float,
-    help="Volume reduction (dB) applied to source audio during profanity windows.",
+    help=(
+        "Volume reduction (dB) applied to source audio during profanity windows; "
+        "defaults to near-muting under the replacement SFX."
+    ),
 )
 @click.option("--work-dir", default=None, help="Directory for intermediate assets.")
 @click.pass_context

@@ -127,7 +127,7 @@ class VideoGenerationPipeline:
         profanity_sound_pack_dir: Path | None = None,
         profanity_words_file: Path | None = None,
         profanity_pad_seconds: float = 0.08,
-        profanity_duck_db: float = -16.0,
+        profanity_duck_db: float = -42.0,
         transcribe_workers: int = 1,
         image_workers: int = 1,
         view_preclassification: bool = False,
@@ -245,7 +245,7 @@ class VideoGenerationPipeline:
         profanity_sound_pack_dir: Path | None = None,
         profanity_words_file: Path | None = None,
         profanity_pad_seconds: float = 0.08,
-        profanity_duck_db: float = -16.0,
+        profanity_duck_db: float = -42.0,
         transcribe_workers: int = 1,
     ) -> str:
         transcript = self._transcribe_with_optional_chunking(
