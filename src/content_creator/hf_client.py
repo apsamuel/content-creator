@@ -58,6 +58,8 @@ class HuggingFaceGateway:
         self._retry = self._load_retry_config_from_env()
         self._request_lock = Lock()
         self._next_request_time = 0.0
+        self._diarization_pipeline: Any = None
+        self._diarization_model_id: str = ""
 
     def generate_text(self, prompt: str) -> str:
         response = self._call_with_retries(
@@ -262,9 +264,26 @@ class HuggingFaceGateway:
 
             try:
                 print("🧠 Running speaker diarization...")
-                diarizer = PyannotePipeline.from_pretrained(
-                    diarization_model, use_auth_token=self._config.hf_token
-                )
+                if (
+                    self._diarization_pipeline is None
+                    or self._diarization_model_id != diarization_model
+                ):
+                    diarizer = PyannotePipeline.from_pretrained(
+                        diarization_model, use_auth_token=self._config.hf_token
+                    )
+                    try:
+                        import torch
+
+                        if torch.cuda.is_available():
+                            diarizer = diarizer.to(torch.device("cuda"))
+                        elif torch.backends.mps.is_available():
+                            diarizer = diarizer.to(torch.device("mps"))
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._diarization_pipeline = diarizer
+                    self._diarization_model_id = diarization_model
+                else:
+                    diarizer = self._diarization_pipeline
                 if speaker_count is not None and speaker_count < 1:
                     raise ValueError("speaker_count must be >= 1")
                 if min_speakers is not None and min_speakers < 1:
@@ -299,16 +318,25 @@ class HuggingFaceGateway:
                     ) from exc
                 raise
 
-            utterances: list[tuple[str, str, float]] = []
+            min_segment_duration = float(
+                os.getenv("HF_DIARIZATION_MIN_SEGMENT_SECONDS", "0.5").strip() or "0.5"
+            )
+
+            segments: list[tuple[int, str, float, float]] = []
             for index, (segment, _, speaker) in enumerate(
                 diarization.itertracks(yield_label=True), start=1
             ):
                 start_time = float(getattr(segment, "start", 0.0))
                 end_time = float(getattr(segment, "end", 0.0))
-                if end_time <= start_time:
+                duration = end_time - start_time
+                if duration < min_segment_duration:
                     continue
+                segments.append((index, str(speaker), start_time, end_time))
 
-                chunk_path = temp_dir / f"speaker_{index:04d}.wav"
+            def _extract_and_transcribe(
+                idx: int, speaker: str, start_time: float, end_time: float
+            ) -> tuple[str, str, float] | None:
+                chunk_path = temp_dir / f"speaker_{idx:04d}.wav"
                 subprocess.run(
                     [
                         "ffmpeg",
@@ -331,10 +359,19 @@ class HuggingFaceGateway:
                     capture_output=True,
                     text=True,
                 )
-
                 text = self.transcribe_audio(chunk_path).strip()
                 if text:
-                    utterances.append((str(speaker), text, end_time - start_time))
+                    return (speaker, text, end_time - start_time)
+                return None
+
+            utterances: list[tuple[str, str, float]] = [
+                result
+                for result in (
+                    _extract_and_transcribe(idx, speaker, start_time, end_time)
+                    for idx, speaker, start_time, end_time in segments
+                )
+                if result is not None
+            ]
 
         resolved_speaker_dominance_threshold = (
             self._resolve_speaker_dominance_threshold(speaker_dominance_threshold)
