@@ -10,6 +10,7 @@ This directory contains detailed, command-level documentation for the content-cr
 - [transcribe command](commands/transcribe.md)
 - [doctor command](commands/doctor.md)
 - [lexicon-doctor command](commands/lexicon-doctor.md)
+- [profanity-debug command](commands/profanity-debug.md)
 
 ## How to use these docs
 

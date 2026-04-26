@@ -13,6 +13,7 @@ There is also a focused utility command:
 
 1. `transcribe`: transcribes an audio file only, with optional ffmpeg chunking for better STT quality on long files.
 2. `lexicon-doctor`: audits profanity lexicon files for duplicate and near-duplicate entries.
+3. `profanity-debug`: renders a debug audio artifact that announces and previews each profanity replacement event.
 
 This gives you a single CLI that uses:
 
@@ -57,6 +58,7 @@ Detailed command documentation with flowcharts is available in [docs/README.md](
 - [transcribe command](docs/commands/transcribe.md)
 - [doctor command](docs/commands/doctor.md)
 - [lexicon-doctor command](docs/commands/lexicon-doctor.md)
+- [profanity-debug command](docs/commands/profanity-debug.md)
 
 Generate a video from text and a visual prompt:
 
@@ -184,12 +186,23 @@ Hugging Face inference reliability controls (all optional, with safe defaults):
 
 These apply to chat completion, STT, TTS, moderation, and image generation calls.
 
+Additional environment controls:
+
+- `HF_CONTENT_SAFETY_MODEL` selects the default moderation model used when `--content-safety-model` is not passed.
+- `HF_DIARIZATION_MODEL` selects the default pyannote diarization model used with `--preserve-speaker`.
+- `HF_DIARIZATION_MIN_SEGMENT_SECONDS` drops diarization segments shorter than this duration before chunk transcription (default `0.5`).
+- `HF_IMAGE_WORKERS` sets the default worker count for scene image generation when `--image-workers` is omitted.
+- `HF_TRANSCRIBE_WORKERS` sets the default worker count for STT chunk processing when `--transcribe-workers` is omitted.
+- `HF_SPEAKER_DOMINANCE_THRESHOLD` sets the default threshold for auto-collapsing sparse secondary speakers when explicit speaker bounds are not provided.
+
 Image generation environment variables:
 
 - `HF_IMAGE_MODEL` selects the Hugging Face image model.
 - `HF_IMAGE_NEGATIVE_PROMPT` sets the default negative prompt applied to every generated image request.
 - `HF_IMAGE_COMPOSITION_MODE` controls the default composition rotation used while preparing scene prompts. Use `balanced` for mixed coverage, `dynamic` for more aggressive angles, `portrait` for character-forward framing, or `establishing` for wider scene coverage.
 - `CONTENT_CREATOR_WORK_DIR` controls where intermediate assets and manifests are written.
+
+You can use [examples/envrc.example](examples/envrc.example) as the authoritative template for the full current environment variable set.
 
 Enable debug mode (emoji status + verbose chunk progress + full tracebacks):
 

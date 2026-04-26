@@ -28,7 +28,9 @@ Use `from-audio` when you already have narration audio and want matching visuals
   - `--video-prompt TEXT`, or
   - `--generate-video-prompt`
 - Optional:
+  - `--image-workers INTEGER` (default `HF_IMAGE_WORKERS` or `1`)
   - `--chunk-seconds FLOAT` (default `45.0`; set to `0` to disable chunking)
+  - `--transcribe-workers INTEGER` (default `HF_TRANSCRIBE_WORKERS` or `1`)
   - `--preserve-speaker / --no-preserve-speaker` (default `--no-preserve-speaker`)
   - `--speaker-count INTEGER` (force diarization to an exact speaker count)
   - `--min-speakers INTEGER` (minimum speaker count bound for diarization)
@@ -37,25 +39,30 @@ Use `from-audio` when you already have narration audio and want matching visuals
   - `--content-safety / --no-content-safety` (default `--no-content-safety`)
   - `--content-safety-filter / --no-content-safety-filter` (default `--no-content-safety-filter`)
   - `--content-safety-threshold FLOAT` (default `0.7`)
-  - `--content-safety-model TEXT` (default `unitary/unbiased-toxic-roberta`)
+  - `--content-safety-model TEXT` (default `cardiffnlp/twitter-roberta-base-offensive`)
   - `--profanity-sfx / --no-profanity-sfx` (default `--no-profanity-sfx`)
   - `--profanity-sound-pack-dir DIR` (default bundled `src/content_creator/sound`)
   - `--profanity-words-file FILE` (optional custom lexicon; default is bundled `data/profanity_words.txt`, with one word or phrase per line)
   - `--profanity-pad-ms INTEGER` (default `80`)
   - `--profanity-duck-db FLOAT` (default `-42.0`)
   - `--work-dir TEXT`
+  - `--view-preclassification / --no-view-preclassification` (default `--no-view-preclassification`)
 
 ## STT and diarization behavior
 
 - Default mode uses STT with optional chunking (`--chunk-seconds`).
+- `--transcribe-workers` controls parallel chunk transcription. If omitted, the command falls back to `HF_TRANSCRIBE_WORKERS`, then `1`.
 - If `--preserve-speaker` is enabled, diarization is used so transcript lines are speaker-labeled.
 - In speaker mode, if one speaker dominates ~90%+ of diarized duration, sparse secondary labels are automatically collapsed into the primary speaker.
 - Speaker-preserving mode requires diarization dependencies and model access.
 - Explicit speaker constraints (`--speaker-count` or `--min-speakers/--max-speakers`) disable automatic dominant-speaker collapse.
 - `--speaker-dominance-threshold` (or `HF_SPEAKER_DOMINANCE_THRESHOLD`) controls when automatic collapse triggers.
+- `HF_DIARIZATION_MIN_SEGMENT_SECONDS` can be used to ignore diarization segments shorter than the configured duration before chunk transcription begins.
 - If `--content-safety` is enabled, transcript text is labeled for unsafe content.
 - If `--content-safety-filter` is also enabled, flagged chunks are dropped before scene planning.
 - If `--profanity-sfx` is enabled, word-level timestamps are used to replace profane words in final audio with effects from the selected sound pack.
+- `--image-workers` controls parallel scene image generation after planning completes.
+- `--view-preclassification` prints the planner's preclassification block after LLM analysis.
 
 ## Mechanism Flow
 
@@ -103,6 +110,18 @@ Prompt generated from transcript:
 content-creator from-audio \
   --audio-file ./assets/voiceover.mp3 \
   --generate-video-prompt \
+  --output ./output/generated-style-from-audio.mp4
+```
+
+Use explicit worker counts and print preclassification details:
+
+```bash
+content-creator from-audio \
+  --audio-file ./assets/voiceover.mp3 \
+  --generate-video-prompt \
+  --transcribe-workers 3 \
+  --image-workers 2 \
+  --view-preclassification \
   --output ./output/generated-style-from-audio.mp4
 ```
 

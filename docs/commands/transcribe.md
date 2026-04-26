@@ -24,6 +24,7 @@ Use `transcribe` when you only need transcript output, such as preparing script 
 - Optional:
   - `--output FILE` (if omitted, transcript prints to terminal)
   - `--chunk-seconds FLOAT` (default `45.0`; set to `0` to disable chunking)
+  - `--transcribe-workers INTEGER` (default `HF_TRANSCRIBE_WORKERS` or `1`)
   - `--preserve-speaker / --no-preserve-speaker` (default `--no-preserve-speaker`)
   - `--speaker-count INTEGER` (force diarization to an exact speaker count)
   - `--min-speakers INTEGER` (minimum speaker count bound for diarization)
@@ -32,7 +33,7 @@ Use `transcribe` when you only need transcript output, such as preparing script 
   - `--content-safety / --no-content-safety` (default `--no-content-safety`)
   - `--content-safety-filter / --no-content-safety-filter` (default `--no-content-safety-filter`)
   - `--content-safety-threshold FLOAT` (default `0.7`)
-  - `--content-safety-model TEXT` (default `unitary/unbiased-toxic-roberta`)
+  - `--content-safety-model TEXT` (default `cardiffnlp/twitter-roberta-base-offensive`)
   - `--profanity-sfx / --no-profanity-sfx` (default `--no-profanity-sfx`)
   - `--profanity-sfx-output FILE` (required when `--profanity-sfx` is enabled)
   - `--profanity-sound-pack-dir DIR` (default bundled `src/content_creator/sound`)
@@ -48,8 +49,10 @@ Use `transcribe` when you only need transcript output, such as preparing script 
 - With `--content-safety`, moderation labels are calculated for transcript text.
 - With both `--content-safety` and `--content-safety-filter`, flagged chunks are removed from output.
 - With `--profanity-sfx`, the command renders a second audio file where profane words are ducked and overlaid with effects.
+- `--transcribe-workers` controls parallel chunk transcription. If omitted, the command falls back to `HF_TRANSCRIBE_WORKERS`, then `1`.
 - Explicit speaker constraints (`--speaker-count` or `--min-speakers/--max-speakers`) disable automatic dominant-speaker collapse.
 - `--speaker-dominance-threshold` (or `HF_SPEAKER_DOMINANCE_THRESHOLD`) controls when automatic collapse triggers.
+- `HF_DIARIZATION_MIN_SEGMENT_SECONDS` can be used to ignore diarization segments shorter than the configured duration before chunk transcription begins.
 - Word-level timestamp replacement requires an STT model that supports word timestamps (default `openai/whisper-large-v3` works).
 
 ## Mechanism Flow
@@ -77,6 +80,16 @@ Write transcript to file:
 content-creator transcribe \
   --audio-file ./assets/meeting.m4a \
   --chunk-seconds 45 \
+  --output ./output/meeting.txt
+```
+
+Transcribe long audio with explicit worker count:
+
+```bash
+content-creator transcribe \
+  --audio-file ./assets/meeting.m4a \
+  --chunk-seconds 45 \
+  --transcribe-workers 3 \
   --output ./output/meeting.txt
 ```
 

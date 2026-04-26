@@ -38,6 +38,39 @@ content-creator --debug --llm-model mistralai/Mixtral-8x7B-Instruct-v0.1 from-te
 - Overrides the image generation model used for scene visuals.
 - Relevant for `from-text` and `from-audio`.
 
+### `--progress / --no-progress`
+
+- Default: `--progress`
+- Controls whether status lines containing progress updates are printed.
+- Useful when piping command output or keeping logs quieter during long runs.
+
+## Core Environment Variables
+
+- `HF_TOKEN` is required for Hugging Face inference API access.
+- `CONTENT_CREATOR_WORK_DIR` sets the default directory used for manifests, clips, audio intermediates, and generated scene images (default `./output`).
+
+## Model Selection Environment Variables
+
+- `HF_LLM_MODEL` selects the default LLM for scene planning and `--generate-video-prompt`.
+- `HF_STT_MODEL` selects the default speech-to-text model.
+- `HF_TTS_MODEL` selects the default narration model.
+- `HF_IMAGE_MODEL` selects the default image model when `-I/--image-model` is not passed.
+- `HF_CONTENT_SAFETY_MODEL` selects the default moderation model used when `--content-safety-model` is omitted.
+- `HF_DIARIZATION_MODEL` selects the default pyannote diarization model used with `--preserve-speaker`.
+
+CLI model overrides still win over these environment variables.
+
+## Tuning Profile Environment Variables
+
+- `HF_TUNING_PROFILE` picks a bundled inference profile. Supported values: `balanced`, `cinematic`, `consistent`, `fast`.
+- `HF_LLM_MAX_TOKENS` overrides the profile/default LLM token budget.
+- `HF_LLM_TEMPERATURE` overrides the profile/default LLM temperature.
+- `HF_LLM_TOP_P` overrides the profile/default LLM top-p.
+- `HF_IMAGE_NUM_INFERENCE_STEPS` overrides the profile/default image inference steps.
+- `HF_IMAGE_GUIDANCE_SCALE` overrides the profile/default image guidance scale.
+- `HF_IMAGE_SEED` sets a deterministic seed for image generation.
+- `HF_SAFETY_TOP_K` overrides the moderation classifier top-k setting.
+
 ## Hugging Face Resilience Environment Variables
 
 These environment variables apply to all Hugging Face inference calls (LLM, STT, TTS, moderation, image generation):
@@ -52,14 +85,19 @@ The gateway retries on rate limits (`429`) and transient server/network errors u
 
 ## Image Generation Environment Variables
 
-- `HF_IMAGE_MODEL` selects the default image model when `-I/--image-model` is not passed.
 - `HF_IMAGE_NEGATIVE_PROMPT` sets the default negative prompt appended to every Hugging Face text-to-image request.
 - `HF_IMAGE_COMPOSITION_MODE` sets the planner's default composition rotation. Supported values: `balanced`, `dynamic`, `portrait`, `establishing`.
-- `CONTENT_CREATOR_WORK_DIR` controls where manifests, audio intermediates, and generated scene images are written.
+- `HF_IMAGE_WORKERS` sets the default image worker count used by `from-text` and `from-audio` when `--image-workers` is omitted.
 
 Use `HF_IMAGE_NEGATIVE_PROMPT` to suppress recurring artifacts globally instead of repeating negative terms in every scene prompt. The default preset targets blur, anatomy mistakes, duplicate limbs, text overlays, watermarks, borders, photorealism, flat lighting, and muddy colors.
 
 Use `HF_IMAGE_COMPOSITION_MODE` to bias framing globally without rewriting individual prompts. `balanced` rotates between wide, hero, and portrait-friendly compositions; the other modes bias more heavily toward their named framing style.
+
+## Audio Transcription and Diarization Environment Variables
+
+- `HF_TRANSCRIBE_WORKERS` sets the default chunk transcription worker count used by `from-audio` and `transcribe` when `--transcribe-workers` is omitted.
+- `HF_DIARIZATION_MIN_SEGMENT_SECONDS` drops diarization segments shorter than this duration before per-speaker chunk transcription (default `0.5`).
+- `HF_SPEAKER_DOMINANCE_THRESHOLD` sets the default threshold used to auto-collapse sparse secondary speakers when explicit speaker constraints are not provided (default `0.9`).
 
 ## Image Provider Billing Environment Variables
 
