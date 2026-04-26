@@ -61,6 +61,31 @@ Use `HF_IMAGE_NEGATIVE_PROMPT` to suppress recurring artifacts globally instead 
 
 Use `HF_IMAGE_COMPOSITION_MODE` to bias framing globally without rewriting individual prompts. `balanced` rotates between wide, hero, and portrait-friendly compositions; the other modes bias more heavily toward their named framing style.
 
+## Image Provider Billing Environment Variables
+
+By default, image generation is **routed through Hugging Face** and charged to your HF account credits. To bypass HF credits and bill a provider directly, set both of the following:
+
+- `HF_INFERENCE_PROVIDER` — the inference provider to use for image generation. Supported values for `black-forest-labs/FLUX.1-dev`: `fal-ai`, `replicate`, `nebius`, `wavespeed`.
+- `HF_PROVIDER_KEY` — the provider's own API key (**not** your HF token).
+
+When both variables are set, a dedicated `InferenceClient` is constructed for image calls using the provider's key. All other inference calls (LLM, STT, TTS, moderation) continue to use the HF-routed client.
+
+| Provider | Key format | Key dashboard |
+|---|---|---|
+| `fal-ai` | `key_…` | https://fal.ai/dashboard/keys |
+| `replicate` | `r8_…` | https://replicate.com/account/api-tokens |
+| `nebius` | — | https://studio.nebius.ai/settings/api-keys |
+| `wavespeed` | — | https://wavespeed.ai/api-keys |
+
+Example `.envrc` entry:
+
+```bash
+HF_INFERENCE_PROVIDER=replicate
+HF_PROVIDER_KEY=r8_your_replicate_key
+```
+
+Leave both variables unset to use the default HF-routed path.
+
 ## Startup Behavior
 
 For commands that build a pipeline (`from-text`, `from-audio`, `transcribe`), the CLI performs startup checks and prints active model and work directory information.

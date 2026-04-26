@@ -1,16 +1,44 @@
-HF_TOKEN=your_hugging_face_token
+#!/bin/bash
+
+# Generate a Hugging Face token at https://huggingface.co/settings/tokens and paste it below.
+export HF_TOKEN=your_hugging_face_token
 
 # Default model selections (can be overridden per command by CLI flags).
 # CLI precedence: --llm-model/-L, --stt-model/-S, --tts-model/-T, --image-model/-I
-HF_LLM_MODEL=meta-llama/Llama-3.1-8B-Instruct
-HF_STT_MODEL=openai/whisper-large-v3
+export HF_LLM_MODEL=meta-llama/Llama-3.1-8B-Instruct
+export HF_STT_MODEL=openai/whisper-large-v3
+
 # Used only when --preserve-speaker is enabled.
 # pyannote models are gated; accept model terms on Hugging Face first.
-HF_DIARIZATION_MODEL=pyannote/speaker-diarization-3.1
-HF_TTS_MODEL=hexgrad/Kokoro-82M
-HF_IMAGE_MODEL=stabilityai/stable-diffusion-xl-base-1.0
-HF_IMAGE_NEGATIVE_PROMPT=blurry, lowres, low detail, soft focus, bad anatomy, bad hands, extra fingers, missing fingers, extra limbs, duplicate subjects, deformed face, cross-eyed, text, subtitles, watermark, logo, border, frame, photorealistic, live action, flat lighting, muddy colors
-HF_IMAGE_COMPOSITION_MODE=balanced
+export HF_DIARIZATION_MODEL=pyannote/speaker-diarization-3.1
+export HF_TTS_MODEL=hexgrad/Kokoro-82M
+export HF_IMAGE_MODEL=stabilityai/stable-diffusion-xl-base-1.0
+export HF_IMAGE_NEGATIVE_PROMPT=blurry, lowres, low detail, soft focus, bad anatomy, bad hands, extra fingers, missing fingers, extra limbs, duplicate subjects, deformed face, cross-eyed, text, subtitles, watermark, logo, border, frame, photorealistic, live action, flat lighting, muddy colors
+export HF_IMAGE_COMPOSITION_MODE=balanced
+
+# Single-switch tuning profile (balanced | cinematic | consistent | fast)
+export HF_TUNING_PROFILE=balanced
+
+# Optional parameter-level overrides (these always win over HF_TUNING_PROFILE)
+#export HF_LLM_MAX_TOKENS=900
+#export HF_LLM_TEMPERATURE=0.6
+#export HF_LLM_TOP_P=1.0
+#export HF_IMAGE_NUM_INFERENCE_STEPS=40
+#export HF_IMAGE_GUIDANCE_SCALE=6.5
+#export HF_IMAGE_SEED=42
+#export HF_SAFETY_TOP_K=5
+
+# Direct provider billing for image generation (optional).
+# When both are set, image requests go directly to the provider and bypass HF credits.
+# HF_INFERENCE_PROVIDER: one of fal-ai, replicate, nebius, wavespeed
+# HF_PROVIDER_KEY: the provider's own API key (NOT your HF token)
+#   fal-ai   → get key at https://fal.ai/dashboard/keys
+#   replicate → get key at https://replicate.com/account/api-tokens  (prefix: r8_)
+#   nebius   → get key at https://studio.nebius.ai/settings/api-keys
+#   wavespeed → get key at https://wavespeed.ai/api-keys
+# Leave both blank to use HF-routed billing (consumes monthly HF credits).
+#export HF_INFERENCE_PROVIDER=replicate
+#export HF_PROVIDER_KEY=r8_your_replicate_key
 
 # Working directory for generated intermediates and manifests.
-CONTENT_CREATOR_WORK_DIR=./output
+export CONTENT_CREATOR_WORK_DIR=./output

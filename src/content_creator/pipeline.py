@@ -624,7 +624,7 @@ class VideoGenerationPipeline:
                 "filter_enabled": content_safety_filter,
                 "threshold": content_safety_threshold,
                 "model": (
-                    content_safety_model or "unitary/unbiased-toxic-roberta"
+                    content_safety_model or "cardiffnlp/twitter-roberta-base-offensive"
                 ).strip(),
                 "chunks": [],
                 "dropped_chunks": 0,

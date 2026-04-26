@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from content_creator.config import AppConfig, ModelConfig
+from content_creator.config import (
+    AppConfig,
+    ImageInferenceConfig,
+    LLMInferenceConfig,
+    ModelConfig,
+    SafetyInferenceConfig,
+)
 from content_creator.hf_client import HuggingFaceGateway
 
 
@@ -60,6 +66,11 @@ def _config(tmp_path: Path) -> AppConfig:
             tts_model="tts/model",
             image_model="image/model",
         ),
+        llm_inference=LLMInferenceConfig(max_tokens=123, temperature=0.4, top_p=0.8),
+        image_inference=ImageInferenceConfig(
+            num_inference_steps=28, guidance_scale=6.5, seed=9
+        ),
+        safety_inference=SafetyInferenceConfig(top_k=3),
     )
 
 
@@ -77,6 +88,9 @@ def test_generate_text_uses_configured_model(
     messages, kwargs = gateway._client.calls["chat_completion"]
     assert messages == [{"role": "user", "content": "hello"}]
     assert kwargs["model"] == "llm/model"
+    assert kwargs["max_tokens"] == 123
+    assert kwargs["temperature"] == pytest.approx(0.4)
+    assert kwargs["top_p"] == pytest.approx(0.8)
 
 
 def test_synthesize_speech_writes_audio(
@@ -177,6 +191,7 @@ def test_classify_content_safety_uses_requested_model_and_parses_scores(
     text, kwargs = gateway._client.calls["text_classification"]
     assert text == "bad words"
     assert kwargs["model"] == "unitary/toxic-bert"
+    assert kwargs["top_k"] == 3
 
 
 def test_generate_image_raises_for_non_image(
@@ -212,6 +227,9 @@ def test_generate_image_passes_negative_prompt(
     assert prompt == "prompt"
     assert kwargs["model"] == "image/model"
     assert kwargs["negative_prompt"] == gateway._config.image_negative_prompt
+    assert kwargs["num_inference_steps"] == 28
+    assert kwargs["guidance_scale"] == pytest.approx(6.5)
+    assert kwargs["seed"] == 9
 
 
 def test_transcribe_audio_with_speakers_uses_diarization_segments(

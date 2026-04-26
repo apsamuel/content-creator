@@ -15,6 +15,7 @@ from content_creator.profanity_sfx import analyze_profanity_lexicon
 def _print_startup_check(config: AppConfig) -> None:
     click.echo("🔎 Startup check")
     click.echo(f"📁 Work directory: {config.work_dir}")
+    click.echo(f"🎛️ Tuning profile: {config.tuning_profile}")
     click.echo(f"🧠 LLM model: {config.models.llm_model}")
     click.echo(f"🎧 STT model: {config.models.stt_model}")
     click.echo(f"🔊 TTS model: {config.models.tts_model}")
@@ -22,6 +23,19 @@ def _print_startup_check(config: AppConfig) -> None:
     click.echo(f"🎙️ Diarization model: {config.models.diarization_model}")
     click.echo(f"🖼️ Image model: {config.models.image_model}")
     click.echo(f"🎬 Image composition mode: {config.image_composition_mode}")
+    click.echo(
+        "🧠 LLM inference: "
+        f"max_tokens={config.llm_inference.max_tokens}, "
+        f"temperature={config.llm_inference.temperature}, "
+        f"top_p={config.llm_inference.top_p}"
+    )
+    click.echo(
+        "🖼️ Image inference: "
+        f"steps={config.image_inference.num_inference_steps}, "
+        f"guidance_scale={config.image_inference.guidance_scale}, "
+        f"seed={config.image_inference.seed}"
+    )
+    click.echo(f"🛡️ Safety inference top_k: {config.safety_inference.top_k}")
 
 
 def _build_pipeline(
@@ -427,7 +441,7 @@ def from_text(
 @click.option(
     "--content-safety-model",
     default=None,
-    help="Override Hugging Face moderation model (default: unitary/unbiased-toxic-roberta).",
+    help="Override Hugging Face moderation model (default: cardiffnlp/twitter-roberta-base-offensive).",
 )
 @click.option(
     "--profanity-sfx/--no-profanity-sfx",
@@ -653,7 +667,7 @@ def from_audio(
 @click.option(
     "--content-safety-model",
     default=None,
-    help="Override Hugging Face moderation model (default: unitary/unbiased-toxic-roberta).",
+    help="Override Hugging Face moderation model (default: cardiffnlp/twitter-roberta-base-offensive).",
 )
 @click.option(
     "--profanity-sfx/--no-profanity-sfx",

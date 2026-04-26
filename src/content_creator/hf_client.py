@@ -45,6 +45,16 @@ class HuggingFaceGateway:
     def __init__(self, config: AppConfig):
         self._config = config
         self._client = InferenceClient(token=config.hf_token)
+        # Separate client for image generation when a direct provider key is set.
+        # Using a provider's own API key bypasses HF-routed billing and charges
+        # the provider account directly (no HF credit deduction).
+        if config.image_provider and config.image_provider_key:
+            self._image_client: InferenceClient = InferenceClient(
+                provider=config.image_provider,  # type: ignore[arg-type]
+                api_key=config.image_provider_key,
+            )
+        else:
+            self._image_client = self._client
         self._retry = self._load_retry_config_from_env()
         self._request_lock = Lock()
         self._next_request_time = 0.0
@@ -55,8 +65,9 @@ class HuggingFaceGateway:
             call=lambda: self._client.chat_completion(
                 messages=[{"role": "user", "content": prompt}],
                 model=self._config.models.llm_model,
-                max_tokens=900,
-                temperature=0.6,
+                max_tokens=self._config.llm_inference.max_tokens,
+                temperature=self._config.llm_inference.temperature,
+                top_p=self._config.llm_inference.top_p,
             ),
         )
         return response.choices[0].message.content or ""
@@ -116,10 +127,15 @@ class HuggingFaceGateway:
     def classify_content_safety(
         self, text: str, *, model: str | None = None
     ) -> dict[str, Any]:
-        model_id = (model or "unitary/unbiased-toxic-roberta").strip()
+        model_id = (model or "cardiffnlp/twitter-roberta-base-offensive").strip()
+        kwargs: dict[str, Any] = {}
+        if self._config.safety_inference.top_k is not None:
+            kwargs["top_k"] = self._config.safety_inference.top_k
         result = self._call_with_retries(
             operation_name="text classification",
-            call=lambda: self._client.text_classification(text, model=model_id),
+            call=lambda: self._client.text_classification(
+                text, model=model_id, **kwargs
+            ),
         )
 
         normalized: list[dict[str, Any]] = []
@@ -458,9 +474,17 @@ class HuggingFaceGateway:
         extra_kwargs: dict[str, Any] = {}
         if self._config.image_negative_prompt.strip():
             extra_kwargs["negative_prompt"] = self._config.image_negative_prompt
+        if self._config.image_inference.num_inference_steps is not None:
+            extra_kwargs["num_inference_steps"] = (
+                self._config.image_inference.num_inference_steps
+            )
+        if self._config.image_inference.guidance_scale is not None:
+            extra_kwargs["guidance_scale"] = self._config.image_inference.guidance_scale
+        if self._config.image_inference.seed is not None:
+            extra_kwargs["seed"] = self._config.image_inference.seed
         image = self._call_with_retries(
             operation_name="text to image",
-            call=lambda: self._client.text_to_image(
+            call=lambda: self._image_client.text_to_image(
                 prompt,
                 model=self._config.models.image_model,
                 width=self._config.width,
