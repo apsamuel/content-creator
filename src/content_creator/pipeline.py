@@ -67,6 +67,7 @@ class VideoGenerationPipeline:
             width=config.width, height=config.height, fps=config.fps
         )
         self._last_content_safety_report: dict[str, object] | None = None
+        self._chunk_ensemble_scores: list[dict[str, object]] = []
 
     def generate_from_text(
         self,
@@ -952,6 +953,16 @@ class VideoGenerationPipeline:
         worker_count = max(1, image_workers)
         total_images = total_scenes * scene_images_per_scene
 
+        # Extract visual intensity from preclassification if available
+        visual_intensity = None
+        if (
+            video_prompt_plan.preclassification
+            and video_prompt_plan.preclassification.ensemble_scorecard
+        ):
+            visual_intensity = (
+                video_prompt_plan.preclassification.ensemble_scorecard.recommended_visual_intensity
+            )
+
         def _render_scene_image(
             scene_index: int, scene_prompt: str, frame_index: int
         ) -> tuple[int, int, Path, float, str]:
@@ -965,6 +976,7 @@ class VideoGenerationPipeline:
                 total_scenes=total_scenes,
                 frame_index=frame_index,
                 frames_per_scene=scene_images_per_scene,
+                visual_intensity=visual_intensity,
             )
             self._gateway.generate_image(prepared_prompt, destination)
             return (
@@ -1087,6 +1099,8 @@ class VideoGenerationPipeline:
         manifest["audio"] = str(audio_path)
         manifest["duration_seconds"] = duration_seconds
         manifest["narration_text"] = narration_text
+        if self._chunk_ensemble_scores:
+            manifest["chunk_ensemble_scores"] = self._chunk_ensemble_scores
         manifest["status"] = "complete"
         manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
         self._write_manifest(run_dir, manifest)
@@ -1101,12 +1115,31 @@ class VideoGenerationPipeline:
         total_scenes: int,
         frame_index: int,
         frames_per_scene: int,
+        visual_intensity: str | None = None,
     ) -> str:
         prepared = self._planner.prepare_image_prompt(
             scene_prompt, scene_index=scene_index - 1, total_scenes=total_scenes
         )
+
+        # Apply visual intensity style guidance if provided
+        intensity_guidance = ""
+        if visual_intensity:
+            intensity_guidance_map = {
+                "restrained": "Use muted, desaturated color palette, subtle lighting contrasts, minimal motion energy, serene composition.",
+                "balanced": "Maintain balanced composition with moderate color saturation and normal lighting contrasts.",
+                "expressive": "Use dynamic camera angles, expressive character gestures, varied composition depth, engaging emotional intensity.",
+                "vivid": "Use saturated, vivid colors, dramatic lighting with strong contrasts, dynamic framing, high visual energy throughout.",
+            }
+            intensity_guidance = intensity_guidance_map.get(
+                visual_intensity.lower(), ""
+            )
+            if intensity_guidance:
+                intensity_guidance = (
+                    f" Style intensity ({visual_intensity}): {intensity_guidance}"
+                )
+
         if frames_per_scene <= 1:
-            return prepared
+            return prepared + intensity_guidance
 
         variation_cues = (
             "slight camera angle shift",
@@ -1119,6 +1152,7 @@ class VideoGenerationPipeline:
         return (
             f"{prepared}. Keep exact same scene continuity, character identity, wardrobe, "
             f"location, and visual style. Frame {frame_index + 1}/{frames_per_scene} with {cue}."
+            f"{intensity_guidance}"
         )
 
     def _resolve_video_prompt_plan(
@@ -1272,6 +1306,7 @@ class VideoGenerationPipeline:
             )
             self._status(f"🧩 Processing {len(chunks)} chunks with speaker diarization")
             chunk_texts: list[str] = []
+            self._chunk_ensemble_scores = []
             total_start = perf_counter()
             for chunk_idx, chunk_path in enumerate(chunks, start=1):
                 self._status(
@@ -1292,6 +1327,19 @@ class VideoGenerationPipeline:
                     total=len(chunks),
                     elapsed_seconds=elapsed,
                 )
+
+                # Compute chunk-level ensemble scorecard
+                chunk_scorecard = self._planner.compute_chunk_ensemble_scorecard(text)
+                self._chunk_ensemble_scores.append(
+                    {
+                        "chunk_index": chunk_idx,
+                        "text_length": len(text),
+                        "weighted_risk_score": chunk_scorecard.weighted_risk_score,
+                        "risk_level": chunk_scorecard.risk_level,
+                        "recommended_visual_intensity": chunk_scorecard.recommended_visual_intensity,
+                    }
+                )
+
                 if content_safety_enabled:
                     evaluation = self._evaluate_content_safety(
                         text=text,

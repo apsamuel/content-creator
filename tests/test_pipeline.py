@@ -176,6 +176,32 @@ class FakePlanner:
         self.prepared_image_prompts.append((prompt_text, scene_index, total_scenes))
         return f"{prompt_text} :: prepared {scene_index + 1}/{total_scenes}"
 
+    def compute_chunk_ensemble_scorecard(
+        self, chunk_text: str
+    ) -> "PreclassificationEnsembleScorecard":
+        from content_creator.planner import (
+            PreclassificationEnsembleScorecard,
+            EnsembleSignal,
+        )
+
+        return PreclassificationEnsembleScorecard(
+            weighted_risk_score=0.35,
+            risk_level="Low",
+            recommended_visual_intensity="balanced",
+            signals=[
+                EnsembleSignal(
+                    source="test",
+                    model="test_model",
+                    label="test_label",
+                    confidence_score=0.7,
+                    normalized_risk=0.35,
+                    weight=1.0,
+                    reason="Test signal",
+                )
+            ],
+            warnings=[],
+        )
+
 
 class FakeMedia:
     def __init__(self, *, width: int, height: int, fps: int):

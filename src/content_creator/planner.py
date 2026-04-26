@@ -665,6 +665,80 @@ Transcript:
             warnings=warnings,
         )
 
+    def compute_chunk_ensemble_scorecard(
+        self, chunk_text: str
+    ) -> PreclassificationEnsembleScorecard:
+        """
+        Compute a simplified ensemble scorecard for a single audio/transcript chunk.
+        Uses only model-based signals (safety, emotion) without full LLM analysis.
+        """
+        if not self._preclassification_ensemble_enabled or not chunk_text.strip():
+            return PreclassificationEnsembleScorecard(
+                weighted_risk_score=0.0,
+                risk_level="Low",
+                recommended_visual_intensity="balanced",
+                signals=[],
+                warnings=["Ensemble disabled or empty chunk text."],
+            )
+
+        signals: list[EnsembleSignal] = []
+        warnings: list[str] = []
+
+        # Primary safety signal
+        safety_signal_primary = self._try_content_safety_signal(
+            narration_text=chunk_text,
+            model_id=self._safety_primary_model,
+            source="model_safety_primary",
+            weight=0.40,
+        )
+        if safety_signal_primary is not None:
+            signals.append(safety_signal_primary)
+        else:
+            warnings.append("Primary safety model signal unavailable.")
+
+        # Secondary safety signal
+        safety_signal_secondary = self._try_content_safety_signal(
+            narration_text=chunk_text,
+            model_id=self._safety_secondary_model,
+            source="model_safety_secondary",
+            weight=0.30,
+        )
+        if safety_signal_secondary is not None:
+            signals.append(safety_signal_secondary)
+        else:
+            warnings.append("Secondary safety model signal unavailable.")
+
+        # Emotion signal
+        emotion_signal = self._try_emotion_signal(
+            narration_text=chunk_text,
+            model_id=self._preclass_emotion_model,
+            mood="neutral",
+        )
+        if emotion_signal is not None:
+            signals.append(emotion_signal)
+        else:
+            warnings.append("Emotion model signal unavailable.")
+
+        # Intent signal (lightweight, no LLM required)
+        intent_signal = self._try_intent_signal(
+            narration_text=chunk_text, model_id=self._preclass_intent_model
+        )
+        if intent_signal is not None:
+            signals.append(intent_signal)
+        else:
+            warnings.append("Intent model signal unavailable.")
+
+        weighted_risk_score = self._weighted_average_risk(signals)
+        return PreclassificationEnsembleScorecard(
+            weighted_risk_score=weighted_risk_score,
+            risk_level=self._risk_level(weighted_risk_score),
+            recommended_visual_intensity=self._recommended_visual_intensity(
+                weighted_risk_score=weighted_risk_score, mood="neutral"
+            ),
+            signals=signals,
+            warnings=warnings,
+        )
+
     def _truthfulness_signal(self, assessment: TranscriptAssessment) -> EnsembleSignal:
         risk_by_label = {
             "LikelyTruthful": 0.15,
