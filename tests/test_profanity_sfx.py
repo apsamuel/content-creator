@@ -10,6 +10,7 @@ from content_creator.profanity_sfx import (
     build_profanity_sfx_plan,
     load_profanity_words,
     load_sound_pack,
+    scan_text_for_profanity,
 )
 
 
@@ -320,3 +321,200 @@ big tits
     assert report.exact_duplicates == {"Fuck": 2}
     assert set(report.near_duplicates["wet back"]) == {"wet back", "Wet   Back"}
     assert set(report.near_duplicates["big tits"]) == {"Big   Tits", "big tits"}
+
+
+def test_scan_text_for_profanity_returns_empty_for_none_lexicon() -> None:
+    assert scan_text_for_profanity("hello world", None) == []
+
+
+def test_scan_text_for_profanity_returns_empty_for_blank_text() -> None:
+    assert scan_text_for_profanity("   ", {"badword"}) == []
+
+
+def test_scan_text_for_profanity_matches_single_word() -> None:
+    matched = scan_text_for_profanity("this is badword here", {"badword"})
+    assert matched == ["badword"]
+
+
+def test_scan_text_for_profanity_no_match_returns_empty() -> None:
+    matched = scan_text_for_profanity("hello world", {"badword"})
+    assert matched == []
+
+
+def test_scan_text_for_profanity_matches_phrase() -> None:
+    matched = scan_text_for_profanity("this is a bad phrase here", {"bad phrase"})
+    assert matched == ["bad phrase"]
+
+
+def test_scan_text_for_profanity_matches_leet_speak() -> None:
+    # 'f4ck' normalises the same way as 'fack'
+    matched = scan_text_for_profanity("you f4ck off", {"fack"})
+    assert matched == ["fack"]
+
+
+def test_scan_text_for_profanity_deduplicates_repeated_word() -> None:
+    matched = scan_text_for_profanity("badword badword badword", {"badword"})
+    assert matched == ["badword"]
+
+
+def test_scan_text_for_profanity_prefers_longer_phrase_over_subset() -> None:
+    matched = scan_text_for_profanity("bad phrase in text", {"bad", "bad phrase"})
+    # 'bad phrase' (longer) is matched and counted once; 'bad' alone may also match
+    assert "bad phrase" in matched
+
+
+# ---------------------------------------------------------------------------
+# Tiered sensitivity tests
+# ---------------------------------------------------------------------------
+
+
+def _make_pack(tmp_path: Path):
+    from content_creator.profanity_sfx import SoundEffectAsset, SoundPack
+
+    sound_file = tmp_path / "bleep.wav"
+    sound_file.write_bytes(b"s")
+    return SoundPack(
+        name="pack",
+        root_dir=tmp_path,
+        target_mean_db=-18.0,
+        assets=[
+            SoundEffectAsset(
+                path=sound_file,
+                duration_seconds=0.3,
+                mean_volume_db=-20.0,
+                max_volume_db=-4.0,
+            )
+        ],
+    )
+
+
+# ---- scan_text_for_profanity: sensitivity ----
+
+
+def test_scan_text_for_profanity_stem_catches_inflected_form() -> None:
+    """Default sensitivity="stem" detects inflected forms like 'fucking'."""
+    matched = scan_text_for_profanity("you're fucking stupid", {"fuck"})
+    assert "fuck" in matched
+
+
+def test_scan_text_for_profanity_exact_skips_inflected_form() -> None:
+    """sensitivity="exact" must NOT match inflected forms."""
+    matched = scan_text_for_profanity(
+        "you're fucking stupid", {"fuck"}, sensitivity="exact"
+    )
+    assert matched == []
+
+
+def test_scan_text_for_profanity_stem_catches_er_suffix() -> None:
+    matched = scan_text_for_profanity("that fucker ran away", {"fuck"})
+    assert "fuck" in matched
+
+
+def test_scan_text_for_profanity_stem_catches_ed_suffix() -> None:
+    matched = scan_text_for_profanity("he fucked up everything", {"fuck"})
+    assert "fuck" in matched
+
+
+def test_scan_text_for_profanity_stem_catches_ers_suffix() -> None:
+    matched = scan_text_for_profanity("bunch of motherfuckers here", {"motherfuck"})
+    assert "motherfuck" in matched
+
+
+def test_scan_text_for_profanity_exact_matches_base_form_unchanged() -> None:
+    """sensitivity="exact" still matches the un-inflected base form."""
+    matched = scan_text_for_profanity("go to hell", {"hell"}, sensitivity="exact")
+    assert "hell" in matched
+
+
+# ---- build_profanity_sfx_plan: sensitivity ----
+
+
+def test_build_plan_stem_catches_inflected_form(tmp_path: Path) -> None:
+    """With default sensitivity='stem', 'fucking' triggers a bleep for lexicon entry 'fuck'."""
+    pack = _make_pack(tmp_path)
+    words = [
+        TimedWord(word="you're", start_seconds=0.0, end_seconds=0.3),
+        TimedWord(word="fucking", start_seconds=0.35, end_seconds=0.65),
+        TimedWord(word="kidding", start_seconds=0.7, end_seconds=1.0),
+    ]
+    plan = build_profanity_sfx_plan(
+        timed_words=words, sound_pack=pack, profanity_words={"fuck"}, pad_seconds=0.05
+    )
+    assert plan.matches_found == 1
+    assert plan.events[0].word == "fucking"
+
+
+def test_build_plan_exact_skips_inflected_form(tmp_path: Path) -> None:
+    """sensitivity='exact' must NOT bleep inflected forms."""
+    pack = _make_pack(tmp_path)
+    words = [
+        TimedWord(word="you're", start_seconds=0.0, end_seconds=0.3),
+        TimedWord(word="fucking", start_seconds=0.35, end_seconds=0.65),
+        TimedWord(word="kidding", start_seconds=0.7, end_seconds=1.0),
+    ]
+    plan = build_profanity_sfx_plan(
+        timed_words=words,
+        sound_pack=pack,
+        profanity_words={"fuck"},
+        pad_seconds=0.05,
+        sensitivity="exact",
+    )
+    assert plan.matches_found == 0
+
+
+def test_build_plan_exact_still_matches_base_form(tmp_path: Path) -> None:
+    pack = _make_pack(tmp_path)
+    words = [
+        TimedWord(word="oh", start_seconds=0.0, end_seconds=0.2),
+        TimedWord(word="fuck", start_seconds=0.3, end_seconds=0.5),
+    ]
+    plan = build_profanity_sfx_plan(
+        timed_words=words,
+        sound_pack=pack,
+        profanity_words={"fuck"},
+        sensitivity="exact",
+    )
+    assert plan.matches_found == 1
+
+
+# ---- spelled-out detection ----
+
+
+def test_build_plan_detects_spelled_out_profanity(tmp_path: Path) -> None:
+    """Single-letter tokens 'f u c k' within gap threshold trigger a bleep."""
+    pack = _make_pack(tmp_path)
+    words = [
+        TimedWord(word="f", start_seconds=0.0, end_seconds=0.15),
+        TimedWord(word="u", start_seconds=0.2, end_seconds=0.35),
+        TimedWord(word="c", start_seconds=0.4, end_seconds=0.55),
+        TimedWord(word="k", start_seconds=0.6, end_seconds=0.75),
+    ]
+    plan = build_profanity_sfx_plan(
+        timed_words=words, sound_pack=pack, profanity_words={"fuck"}
+    )
+    assert plan.matches_found == 1
+
+
+def test_build_plan_ignores_spelled_out_with_large_gap(tmp_path: Path) -> None:
+    """Spelled-out letters separated by > 0.8 s are NOT collapsed."""
+    pack = _make_pack(tmp_path)
+    words = [
+        TimedWord(word="f", start_seconds=0.0, end_seconds=0.15),
+        TimedWord(word="u", start_seconds=1.1, end_seconds=1.3),  # > 0.8 s gap
+        TimedWord(word="c", start_seconds=1.4, end_seconds=1.55),
+        TimedWord(word="k", start_seconds=1.6, end_seconds=1.75),
+    ]
+    plan = build_profanity_sfx_plan(
+        timed_words=words, sound_pack=pack, profanity_words={"fuck"}
+    )
+    assert plan.matches_found == 0
+
+
+def test_build_plan_stem_does_not_double_count(tmp_path: Path) -> None:
+    """The exact pass already covers 'fuck'; stem pass must not add a duplicate."""
+    pack = _make_pack(tmp_path)
+    words = [TimedWord(word="fuck", start_seconds=0.0, end_seconds=0.4)]
+    plan = build_profanity_sfx_plan(
+        timed_words=words, sound_pack=pack, profanity_words={"fuck"}
+    )
+    assert plan.matches_found == 1

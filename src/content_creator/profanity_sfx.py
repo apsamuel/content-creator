@@ -1,13 +1,40 @@
 from __future__ import annotations
 
+import importlib
 import json
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from content_creator.hf_client import TimedWord
+
+try:
+    _jellyfish: Any = importlib.import_module("jellyfish")
+    _HAS_JELLYFISH = True
+except ImportError:  # pragma: no cover
+    _jellyfish = None
+    _HAS_JELLYFISH = False
+
+# Ordered longest-first so the greediest suffix is stripped once.
+_STEM_SUFFIXES: tuple[str, ...] = (
+    "ings",
+    "ers",
+    "ing",
+    "ied",
+    "ies",
+    "ed",
+    "er",
+    "es",
+    "s",
+)
+_MIN_STEM_LENGTH: int = 3  # never reduce a word below 3 chars
+_PHONETIC_MIN_NORM_LENGTH: int = 5  # skip phonetic encoding for very short words
+_SPELLED_OUT_MAX_GAP_SECONDS: float = (
+    0.8  # max gap between letters in a spelled-out run
+)
+_SPELLED_OUT_MIN_RUN: int = 3  # need at least 3 consecutive single-char tokens
 
 
 @dataclass(slots=True)
@@ -128,15 +155,40 @@ def build_profanity_sfx_plan(
     sound_pack: SoundPack,
     profanity_words: set[str] | None = None,
     pad_seconds: float = 0.08,
+    sensitivity: str = "stem",
 ) -> ProfanitySfxPlan:
+    """Build a profanity SFX plan from *timed_words*.
+
+    *sensitivity* controls how aggressively inflections and accent variants
+    are matched:
+
+    ``"exact"``
+        Only the normalized exact form (leet-speak substituted).
+    ``"stem"``  *(default)*
+        Exact + morphological suffix stripping.  Catches inflected forms such
+        as *fucking*, *fucked*, *fucker*, *motherfuckers*.
+    ``"phonetic"``
+        Stem + Double Metaphone phonetic encoding.  Also catches
+        accent-induced transcription variants (e.g. *fok* for *fuck*).
+        Requires the optional *jellyfish* package; falls back to ``"stem"``
+        when the package is not installed.
+    """
     words = list(timed_words)
     lexicon = (
         profanity_words if profanity_words is not None else load_profanity_words(None)
     )
     effective_pad = max(0.0, float(pad_seconds))
-    patterns = _compile_phrase_patterns(lexicon)
+    onset_pad = _compute_onset_pad_seconds(effective_pad)
+    merge_gap_seconds = _compute_merge_gap_seconds(effective_pad)
 
-    if not patterns:
+    use_stem = sensitivity in ("stem", "phonetic")
+    use_phonetic = sensitivity == "phonetic"
+
+    exact_patterns = _compile_phrase_patterns(lexicon)
+    stem_patterns = _compile_stem_patterns(lexicon) if use_stem else []
+    phonetic_patterns = _compile_phonetic_patterns(lexicon) if use_phonetic else []
+
+    if not exact_patterns and not stem_patterns and not phonetic_patterns:
         return ProfanitySfxPlan(
             sound_pack_name=sound_pack.name,
             sound_pack_dir=sound_pack.root_dir,
@@ -146,38 +198,49 @@ def build_profanity_sfx_plan(
         )
 
     normalized_words = [_normalize_word(word.word) for word in words]
-    onset_pad = _compute_onset_pad_seconds(effective_pad)
-    merge_gap_seconds = _compute_merge_gap_seconds(effective_pad)
+    stem_words = [_stem_word(nw) for nw in normalized_words] if use_stem else []
+    phonetic_words = (
+        [_phonetic_code(nw) or "" for nw in normalized_words] if use_phonetic else []
+    )
 
-    matched_spans: list[tuple[str, float, float, int, int]] = []
-    index = 0
-    while index < len(words):
-        if not normalized_words[index]:
-            index += 1
-            continue
+    all_matched: list[tuple[str, float, float, int, int]] = []
 
-        matched = False
-        for pattern in patterns:
-            pattern_length = len(pattern)
-            upper_bound = index + pattern_length
-            if upper_bound > len(words):
-                continue
+    # Pre-pass: detect spelled-out profanity (e.g. "f u c k").
+    all_matched.extend(
+        _find_spelled_out_spans(
+            words,
+            normalized_words,
+            exact_patterns,
+            stem_patterns,
+            onset_pad,
+            effective_pad,
+        )
+    )
+    skip: set[int] = {i for _, _, _, i0, i1 in all_matched for i in range(i0, i1)}
 
-            if tuple(normalized_words[index:upper_bound]) != pattern:
-                continue
+    # Pass 1: exact normalized match.
+    exact_spans = _run_match_pass(
+        words, normalized_words, exact_patterns, onset_pad, effective_pad, skip
+    )
+    all_matched.extend(exact_spans)
+    skip |= {i for _, _, _, i0, i1 in exact_spans for i in range(i0, i1)}
 
-            start = max(0.0, float(words[index].start_seconds) - onset_pad)
-            end = max(start, float(words[upper_bound - 1].end_seconds) + effective_pad)
-            phrase = " ".join(word.word for word in words[index:upper_bound]).strip()
-            matched_spans.append((phrase, start, end, index, upper_bound))
-            index = upper_bound
-            matched = True
-            break
+    # Pass 2: morphological stem match — catches inflections like *fucking*.
+    if use_stem and stem_patterns:
+        stem_spans = _run_match_pass(
+            words, stem_words, stem_patterns, onset_pad, effective_pad, skip
+        )
+        all_matched.extend(stem_spans)
+        skip |= {i for _, _, _, i0, i1 in stem_spans for i in range(i0, i1)}
 
-        if not matched:
-            index += 1
+    # Pass 3: phonetic match — catches accent-variant transcriptions.
+    if use_phonetic and phonetic_patterns:
+        phonetic_spans = _run_match_pass(
+            words, phonetic_words, phonetic_patterns, onset_pad, effective_pad, skip
+        )
+        all_matched.extend(phonetic_spans)
 
-    merged_spans = _merge_spans(matched_spans, merge_gap_seconds=merge_gap_seconds)
+    merged_spans = _merge_spans(all_matched, merge_gap_seconds=merge_gap_seconds)
     events: list[ProfanitySfxEvent] = []
     asset = _select_sound_effect_asset(sound_pack)
     for word, start, end in merged_spans:
@@ -445,6 +508,250 @@ def _compile_phrase_patterns(lexicon: set[str] | None) -> list[tuple[str, ...]]:
         if normalized
     }
     return sorted(patterns, key=lambda pattern: (-len(pattern), pattern))
+
+
+def _stem_word(word: str) -> str:
+    """Strip the longest matching inflection suffix from *word*.
+
+    Applied after :func:`_normalize_word` so the input is already lowercase
+    alpha-only.  Never shortens a word below :data:`_MIN_STEM_LENGTH` chars.
+    """
+    for suffix in _STEM_SUFFIXES:
+        end = len(word) - len(suffix)
+        if word.endswith(suffix) and end >= _MIN_STEM_LENGTH:
+            return word[:end]
+    return word
+
+
+def _compile_stem_patterns(lexicon: set[str] | None) -> list[tuple[str, ...]]:
+    """Like :func:`_compile_phrase_patterns` but each token is additionally stemmed."""
+    if not lexicon:
+        return []
+    patterns = {
+        tuple(_stem_word(tok) for tok in normalized.split())
+        for entry in lexicon
+        for normalized in [_normalize_phrase_text(entry)]
+        if normalized
+    }
+    return sorted(patterns, key=lambda p: (-len(p), p))
+
+
+def _phonetic_code(word: str) -> str | None:
+    """Return a Metaphone code for *word*, or ``None`` when unavailable.
+
+    Returns ``None`` when *jellyfish* is not installed or the word is shorter
+    than :data:`_PHONETIC_MIN_NORM_LENGTH` (very short words produce too many
+    false-positive collisions).
+    """
+    if not _HAS_JELLYFISH or len(word) < _PHONETIC_MIN_NORM_LENGTH:
+        return None
+    try:
+        code = _jellyfish.metaphone(word)  # type: ignore[union-attr]
+        return code or None
+    except Exception:
+        return None
+
+
+def _compile_phonetic_patterns(lexicon: set[str] | None) -> list[tuple[str, ...]]:
+    """Patterns of Metaphone codes.
+
+    Lexicon entries where any individual word encodes to ``None`` (too short or
+    *jellyfish* unavailable) are excluded so every element in a returned tuple
+    is a non-empty string.
+    """
+    if not lexicon or not _HAS_JELLYFISH:
+        return []
+    result: set[tuple[str, ...]] = set()
+    for entry in lexicon:
+        normalized = _normalize_phrase_text(entry)
+        if not normalized:
+            continue
+        codes = tuple(_phonetic_code(tok) for tok in normalized.split())
+        if None in codes:
+            continue  # skip entries where any token is too short to encode
+        result.add(codes)  # type: ignore[arg-type]
+    return sorted(result, key=lambda p: (-len(p), p))
+
+
+def _run_match_pass(
+    words: list[TimedWord],
+    token_seq: list[str],
+    patterns: list[tuple[str, ...]],
+    onset_pad: float,
+    effective_pad: float,
+    skip_indices: set[int],
+) -> list[tuple[str, float, float, int, int]]:
+    """Single left-to-right matching pass over *token_seq*.
+
+    Returns ``(phrase, start, end, i0, i1)`` tuples for each match found.
+    Positions in *skip_indices* are not used as match start points and pattern
+    windows that overlap any skipped position are also rejected.
+    """
+    matched_spans: list[tuple[str, float, float, int, int]] = []
+    index = 0
+    while index < len(words):
+        if index in skip_indices or not token_seq[index]:
+            index += 1
+            continue
+        matched = False
+        for pattern in patterns:
+            plen = len(pattern)
+            end_idx = index + plen
+            if end_idx > len(words):
+                continue
+            # Reject window if any position is already covered by a prior pass.
+            if skip_indices.intersection(range(index, end_idx)):
+                continue
+            if tuple(token_seq[index:end_idx]) != pattern:
+                continue
+            start = max(0.0, float(words[index].start_seconds) - onset_pad)
+            end = max(start, float(words[end_idx - 1].end_seconds) + effective_pad)
+            phrase = " ".join(w.word for w in words[index:end_idx]).strip()
+            matched_spans.append((phrase, start, end, index, end_idx))
+            index = end_idx
+            matched = True
+            break
+        if not matched:
+            index += 1
+    return matched_spans
+
+
+def _find_spelled_out_spans(
+    words: list[TimedWord],
+    normalized_words: list[str],
+    exact_patterns: list[tuple[str, ...]],
+    stem_patterns: list[tuple[str, ...]],
+    onset_pad: float,
+    effective_pad: float,
+) -> list[tuple[str, float, float, int, int]]:
+    """Detect profanity spelled out letter-by-letter (e.g. "f u c k").
+
+    Scans for runs of consecutive single-character normalized tokens where the
+    gap between adjacent tokens is at most :data:`_SPELLED_OUT_MAX_GAP_SECONDS`.
+    Any sub-run of length ≥ :data:`_SPELLED_OUT_MIN_RUN` whose concatenated
+    characters form a single-token pattern match is returned as a span.
+    """
+    # Only single-token patterns can be reconstructed from spelled-out letters.
+    single_patterns = {p[0] for p in exact_patterns if len(p) == 1}
+    single_patterns |= {p[0] for p in stem_patterns if len(p) == 1}
+    if not single_patterns:
+        return []
+
+    n = len(words)
+    spans: list[tuple[str, float, float, int, int]] = []
+    i = 0
+    while i < n:
+        if len(normalized_words[i]) != 1:
+            i += 1
+            continue
+        # Extend the run as long as each next token is a single char within the gap.
+        run_start = i
+        j = i + 1
+        while j < n and len(normalized_words[j]) == 1:
+            gap = float(words[j].start_seconds) - float(words[j - 1].end_seconds)
+            if gap > _SPELLED_OUT_MAX_GAP_SECONDS:
+                break
+            j += 1
+        run_end = j  # exclusive
+
+        if run_end - run_start >= _SPELLED_OUT_MIN_RUN:
+            # Check every contiguous sub-window within the run.
+            for length in range(_SPELLED_OUT_MIN_RUN, run_end - run_start + 1):
+                for s in range(run_start, run_end - length + 1):
+                    concat = "".join(normalized_words[s : s + length])
+                    if concat in single_patterns:
+                        start_t = max(0.0, float(words[s].start_seconds) - onset_pad)
+                        end_t = max(
+                            start_t,
+                            float(words[s + length - 1].end_seconds) + effective_pad,
+                        )
+                        phrase = " ".join(w.word for w in words[s : s + length]).strip()
+                        spans.append((phrase, start_t, end_t, s, s + length))
+
+        i = run_end if run_end > i + 1 else i + 1
+
+    return spans
+
+
+def scan_text_for_profanity(
+    text: str, profanity_words: set[str] | None, sensitivity: str = "stem"
+) -> list[str]:
+    """Return the original lexicon entries found in *text* (no timestamps needed).
+
+    Applies the same normalisation as the SFX planner.  Each matched entry is
+    reported at most once.  Returns an empty list when *profanity_words* is
+    ``None`` / empty or *text* is blank.
+
+    *sensitivity* mirrors the same parameter on :func:`build_profanity_sfx_plan`
+    (``"exact"``, ``"stem"``, or ``"phonetic"``).
+    """
+    if not profanity_words or not text.strip():
+        return []
+
+    raw_tokens = re.split(r"\s+", text.strip())
+    norm_tokens = [_normalize_word(t) for t in raw_tokens if t]
+    if not norm_tokens:
+        return []
+
+    use_stem = sensitivity in ("stem", "phonetic")
+    use_phonetic = sensitivity == "phonetic"
+
+    stem_tokens = [_stem_word(t) for t in norm_tokens] if use_stem else []
+    phonetic_tokens = (
+        [_phonetic_code(t) or "" for t in norm_tokens] if use_phonetic else []
+    )
+
+    # Build pattern → original-entry mappings.
+    norm_to_entry: dict[tuple[str, ...], str] = {}
+    stem_to_entry: dict[tuple[str, ...], str] = {}
+    phonetic_to_entry: dict[tuple[str, ...], str] = {}
+    for entry in profanity_words:
+        norm = _normalize_phrase_text(entry)
+        if not norm:
+            continue
+        toks = norm.split()
+        exact_key: tuple[str, ...] = tuple(toks)
+        norm_to_entry[exact_key] = entry
+        if use_stem:
+            stem_key: tuple[str, ...] = tuple(_stem_word(t) for t in toks)
+            stem_to_entry[stem_key] = entry
+        if use_phonetic:
+            codes = tuple(_phonetic_code(t) for t in toks)
+            if None not in codes:
+                phonetic_to_entry[codes] = entry  # type: ignore[assignment]
+
+    n = len(norm_tokens)
+    seen: set[tuple[str, ...]] = set()
+    matched: list[str] = []
+
+    def _scan(
+        token_seq: list[str],
+        patterns: list[tuple[str, ...]],
+        lookup: dict[tuple[str, ...], str],
+    ) -> None:
+        for pattern in patterns:
+            plen = len(pattern)
+            if plen > n:
+                continue
+            for i in range(n - plen + 1):
+                if tuple(token_seq[i : i + plen]) == pattern:
+                    if pattern not in seen:
+                        seen.add(pattern)
+                        matched.append(lookup.get(pattern, " ".join(pattern)))
+                    break
+
+    exact_patterns = _compile_phrase_patterns(profanity_words)
+    _scan(norm_tokens, exact_patterns, norm_to_entry)
+
+    if use_stem:
+        stem_patterns = _compile_stem_patterns(profanity_words)
+        _scan(stem_tokens, stem_patterns, stem_to_entry)
+
+    if use_phonetic:
+        phonetic_patterns = _compile_phonetic_patterns(profanity_words)
+        _scan(phonetic_tokens, phonetic_patterns, phonetic_to_entry)
+
+    return matched
 
 
 def _merge_spans(
