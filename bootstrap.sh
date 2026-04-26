@@ -141,18 +141,18 @@ setup_envrc() {
     success "Copied examples/envrc.example → .envrc"
   fi
 
-  printf "\n${BOLD}Required API key:${RESET}\n"
+  printf "%b\n" "\n${BOLD}Required API key:${RESET}"
   dim "HF_TOKEN — your Hugging Face access token"
   dim "  → https://huggingface.co/settings/tokens"
   dim "  → Needs 'Read' scope (or 'Write' if you push models)"
 
-  printf "\n${BOLD}Gated models — you must accept terms before first use:${RESET}\n"
+  printf "%b\n" "\n${BOLD}Gated models — you must accept terms before first use:${RESET}"
   dim "pyannote/speaker-diarization-3.1  (required for --preserve-speaker)"
   dim "  → https://huggingface.co/pyannote/speaker-diarization-3.1"
   dim "meta-llama/Llama-3.1-8B-Instruct  (default LLM)"
   dim "  → https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct"
 
-  printf "\n${BOLD}Optional env overrides (defaults shown):${RESET}\n"
+  printf "%b\n" "\n${BOLD}Optional env overrides (defaults shown):${RESET}"
   dim "HF_LLM_MODEL      meta-llama/Llama-3.1-8B-Instruct"
   dim "HF_STT_MODEL      openai/whisper-large-v3"
   dim "HF_TTS_MODEL      hexgrad/Kokoro-82M"
@@ -250,7 +250,7 @@ run_trufflehog() {
 
 # ── main ───────────────────────────────────────────────────────────────────────
 main() {
-  printf "${BOLD}content-creator bootstrap${RESET}  ${DIM}(${SCRIPT_DIR})${RESET}\n"
+  printf "%b\n" "${BOLD}content-creator bootstrap${RESET}  ${DIM}(${SCRIPT_DIR})${RESET}"
 
   [[ "$SKIP_ENVRC"      == false ]] && setup_envrc
   [[ "$SKIP_VENV"       == false ]] && setup_venv
@@ -258,9 +258,9 @@ main() {
   [[ "$SKIP_TESTS"      == false ]] && run_tests
   [[ "$SKIP_TRUFFLEHOG" == false ]] && run_trufflehog
 
-  printf "\n${GREEN}${BOLD}Bootstrap complete.${RESET}\n"
+  printf "%b\n" "\n${GREEN}${BOLD}Bootstrap complete.${RESET}"
   if [[ -f "${VENV_DIR}/bin/activate" ]]; then
-    printf "${DIM}Activate the venv:  source .venv/bin/activate${RESET}\n"
+    printf "%b\n" "${DIM}Activate the venv:  source .venv/bin/activate${RESET}"
   fi
 }
 

@@ -5,14 +5,15 @@ export HF_TOKEN=your_hugging_face_token
 
 # Default model selections (can be overridden per command by CLI flags).
 # CLI precedence: --llm-model/-L, --stt-model/-S, --tts-model/-T, --image-model/-I
-export HF_LLM_MODEL=meta-llama/Llama-3.1-8B-Instruct
+export HF_LLM_MODEL=meta-llama/Llama-3.3-70B-Instruct
 export HF_STT_MODEL=openai/whisper-large-v3
 
 # Used only when --preserve-speaker is enabled.
 # pyannote models are gated; accept model terms on Hugging Face first.
 export HF_DIARIZATION_MODEL=pyannote/speaker-diarization-3.1
 export HF_TTS_MODEL=hexgrad/Kokoro-82M
-export HF_IMAGE_MODEL=stabilityai/stable-diffusion-xl-base-1.0
+export HF_IMAGE_MODEL=black-forest-labs/FLUX.1-dev
+export HF_CONTENT_SAFETY_MODEL=cardiffnlp/twitter-roberta-base-offensive
 export HF_IMAGE_NEGATIVE_PROMPT=blurry, lowres, low detail, soft focus, bad anatomy, bad hands, extra fingers, missing fingers, extra limbs, duplicate subjects, deformed face, cross-eyed, text, subtitles, watermark, logo, border, frame, photorealistic, live action, flat lighting, muddy colors
 export HF_IMAGE_COMPOSITION_MODE=balanced
 
@@ -28,6 +29,14 @@ export HF_TUNING_PROFILE=balanced
 #export HF_IMAGE_SEED=42
 #export HF_SAFETY_TOP_K=5
 
+# Diarization + transcription controls
+export HF_DIARIZATION_MIN_SEGMENT_SECONDS=0.5
+export HF_SPEAKER_DOMINANCE_THRESHOLD=0.9
+#export HF_TRANSCRIBE_WORKERS=2
+
+# Image generation worker controls
+#export HF_IMAGE_WORKERS=2
+
 # Direct provider billing for image generation (optional).
 # When both are set, image requests go directly to the provider and bypass HF credits.
 # HF_INFERENCE_PROVIDER: one of fal-ai, replicate, nebius, wavespeed
@@ -42,3 +51,10 @@ export HF_TUNING_PROFILE=balanced
 
 # Working directory for generated intermediates and manifests.
 export CONTENT_CREATOR_WORK_DIR=./output
+
+# Hugging Face inference retry / throttling controls.
+#export HF_INFERENCE_MAX_RETRIES=5
+#export HF_INFERENCE_BASE_DELAY_SECONDS=1.0
+#export HF_INFERENCE_MAX_DELAY_SECONDS=30.0
+#export HF_INFERENCE_JITTER_SECONDS=0.35
+#export HF_INFERENCE_MIN_INTERVAL_SECONDS=0.25
