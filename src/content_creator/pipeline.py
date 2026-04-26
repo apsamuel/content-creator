@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
+import tempfile
 import textwrap
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
@@ -19,6 +21,7 @@ from content_creator.profanity_sfx import (
     build_profanity_sfx_plan,
     load_profanity_words,
     load_sound_pack,
+    scan_text_for_profanity,
 )
 
 
@@ -180,6 +183,11 @@ class VideoGenerationPipeline:
             content_safety_threshold=content_safety_threshold,
             content_safety_model=content_safety_model,
             transcribe_workers=transcribe_workers,
+            profanity_words=(
+                load_profanity_words(profanity_words_file)
+                if content_safety_enabled
+                else None
+            ),
         )
         if not transcript.strip() and content_safety_enabled and content_safety_filter:
             raise ValueError(
@@ -262,6 +270,11 @@ class VideoGenerationPipeline:
             content_safety_threshold=content_safety_threshold,
             content_safety_model=content_safety_model,
             transcribe_workers=transcribe_workers,
+            profanity_words=(
+                load_profanity_words(profanity_words_file)
+                if content_safety_enabled
+                else None
+            ),
         )
         self._emit_content_safety_summary()
         if profanity_sfx_enabled:
@@ -288,6 +301,431 @@ class VideoGenerationPipeline:
             output_path.write_text(wrap_transcription(transcript), encoding="utf-8")
         self._status("✅ Transcription complete")
         return transcript
+
+    def build_profanity_debug_audio(
+        self,
+        *,
+        audio_path: Path,
+        output_path: Path,
+        manifest_events: list[dict[str, object]] | None = None,
+        preclassification_data: dict[str, object] | None = None,
+        transcript_text: str | None = None,
+        sound_pack_dir: Path | None = None,
+        profanity_words_file: Path | None = None,
+        pad_seconds: float = 0.08,
+        context_seconds: float = 0.5,
+        gap_seconds: float = 0.3,
+    ) -> int:
+        """Build a debug audio file illustrating each profanity detection event.
+
+        For every event the output contains: a synthesized voice announcing the
+        detected word, start/end/duration; the raw audio snippet; a synthesized
+        voice saying "Profanity filter implemented"; and the exact bleep that
+        production would overlay.
+
+        Returns the number of events processed (0 if none found).
+        """
+        if manifest_events is not None:
+            events = manifest_events
+        else:
+            self._status(
+                "🎤 Transcribing audio with word timestamps for profanity detection…"
+            )
+            default_sound_dir = Path(__file__).resolve().parent / "sound"
+            resolved_sound_dir = (
+                sound_pack_dir.expanduser().resolve()
+                if sound_pack_dir
+                else default_sound_dir
+            )
+            generated_transcript_text, timed_words = (
+                self._gateway.transcribe_audio_with_word_timestamps(audio_path)
+            )
+            if transcript_text is None:
+                transcript_text = generated_transcript_text
+            sound_pack = load_sound_pack(sound_pack_dir=resolved_sound_dir)
+            profanity_words = load_profanity_words(profanity_words_file)
+            plan = build_profanity_sfx_plan(
+                timed_words=timed_words,
+                sound_pack=sound_pack,
+                profanity_words=profanity_words,
+                pad_seconds=pad_seconds,
+            )
+            events = [
+                {
+                    "word": ev.word,
+                    "start_seconds": ev.start_seconds,
+                    "end_seconds": ev.end_seconds,
+                    "sfx": str(ev.sfx_path),
+                    "sfx_duration_seconds": ev.sfx_duration_seconds,
+                    "sfx_gain_db": ev.sfx_gain_db,
+                }
+                for ev in plan.events
+            ]
+
+        if not events:
+            self._status("ℹ️ No profanity events found — no debug audio to generate.")
+            return 0
+
+        source_duration_seconds: float | None = None
+        try:
+            source_duration_seconds = self._media.get_audio_duration(audio_path)
+        except Exception:
+            source_duration_seconds = None
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with tempfile.TemporaryDirectory(prefix="profanity_debug_") as tmp_str:
+            tmp = Path(tmp_str)
+            segment_paths: list[Path] = []
+
+            silence_path = tmp / "silence.wav"
+            self._ffmpeg_generate_silence(silence_path, duration_seconds=gap_seconds)
+
+            input_summary_text = self._build_debug_input_summary(
+                audio_path=audio_path,
+                output_path=output_path,
+                event_count=len(events),
+                source_duration_seconds=source_duration_seconds,
+                pad_seconds=pad_seconds,
+                context_seconds=context_seconds,
+                gap_seconds=gap_seconds,
+                using_manifest_events=manifest_events is not None,
+                preclassification_data=preclassification_data,
+            )
+            if input_summary_text:
+                self._status("🎤 Prepending synthesized input summary")
+                intro_raw = tmp / "intro_raw.wav"
+                intro_path = tmp / "intro.wav"
+                self._synthesize_long_speech(input_summary_text, intro_raw, tmp)
+                self._ffmpeg_normalize_audio(intro_raw, intro_path)
+                segment_paths.append(intro_path)
+                segment_paths.append(silence_path)
+
+            for idx, event in enumerate(events):
+                word = str(event.get("word", ""))
+                start = self._coerce_float(event.get("start_seconds"))
+                end = self._coerce_float(event.get("end_seconds"))
+                sfx_path = Path(str(event.get("sfx", "")))
+                sfx_duration = self._coerce_float(event.get("sfx_duration_seconds"))
+                elapsed = max(0.0, end - start)
+
+                self._status(
+                    f"🎤 Building debug segment {idx + 1}/{len(events)}: '{word}'"
+                )
+
+                # 1. TTS announcement
+                announce_text = (
+                    f"Detected profanity: {word}. "
+                    f"Start time: {start:.2f} seconds. "
+                    f"End time: {end:.2f} seconds. "
+                    f"Duration: {elapsed:.2f} seconds."
+                )
+                raw_announce = tmp / f"event_{idx:03d}_announce_raw.wav"
+                announce_path = tmp / f"event_{idx:03d}_announce.wav"
+                self._gateway.synthesize_speech(announce_text, raw_announce)
+                self._ffmpeg_normalize_audio(raw_announce, announce_path)
+
+                # 2. Raw audio snippet with context window
+                snippet_start = max(0.0, start - context_seconds)
+                snippet_end = end + context_seconds
+                snippet_path = tmp / f"event_{idx:03d}_snippet.wav"
+                self._ffmpeg_extract_audio_segment(
+                    audio_path,
+                    snippet_path,
+                    start_seconds=snippet_start,
+                    end_seconds=snippet_end,
+                )
+
+                # 3. TTS: "Profanity filter implemented."
+                raw_filter = tmp / f"event_{idx:03d}_filter_raw.wav"
+                filter_path = tmp / f"event_{idx:03d}_filter.wav"
+                self._gateway.synthesize_speech(
+                    "Profanity filter implemented.", raw_filter
+                )
+                self._ffmpeg_normalize_audio(raw_filter, filter_path)
+
+                # 4. Bleep trimmed to its production duration
+                bleep_path = tmp / f"event_{idx:03d}_bleep.wav"
+                self._ffmpeg_extract_bleep(
+                    sfx_path, bleep_path, duration_seconds=sfx_duration
+                )
+
+                # Prepend inter-event silence for every event after the first
+                if segment_paths:
+                    segment_paths.append(silence_path)
+                segment_paths.extend(
+                    [
+                        announce_path,
+                        silence_path,
+                        snippet_path,
+                        silence_path,
+                        filter_path,
+                        silence_path,
+                        bleep_path,
+                    ]
+                )
+
+            summary_text = self._build_debug_preclassification_summary(
+                events=events,
+                transcript_text=transcript_text,
+                preclassification_data=preclassification_data,
+            )
+            if summary_text:
+                self._status("🎤 Appending synthesized pre-classification summary")
+                summary_raw = tmp / "summary_raw.wav"
+                summary_path = tmp / "summary.wav"
+                self._synthesize_long_speech(summary_text, summary_raw, tmp)
+                self._ffmpeg_normalize_audio(summary_raw, summary_path)
+                if segment_paths:
+                    segment_paths.append(silence_path)
+                segment_paths.append(summary_path)
+
+            concat_list = tmp / "concat.txt"
+            concat_list.write_text(
+                "\n".join(f"file '{p.as_posix()}'" for p in segment_paths),
+                encoding="utf-8",
+            )
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    str(concat_list),
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "192k",
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "2",
+                    str(output_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        return len(events)
+
+    def _build_debug_input_summary(
+        self,
+        *,
+        audio_path: Path,
+        output_path: Path,
+        event_count: int,
+        source_duration_seconds: float | None,
+        pad_seconds: float,
+        context_seconds: float,
+        gap_seconds: float,
+        using_manifest_events: bool,
+        preclassification_data: dict[str, object] | None = None,
+    ) -> str:
+        summary_parts = [
+            "Debug input summary.",
+            f"Input file: {audio_path.name}.",
+            f"Output file: {output_path.name}.",
+        ]
+        if source_duration_seconds is not None:
+            summary_parts.append(
+                f"Source elapsed time: {source_duration_seconds:.2f} seconds."
+            )
+        summary_parts.extend(
+            [
+                f"Events to process: {event_count}.",
+                (
+                    "Event source: manifest input."
+                    if using_manifest_events
+                    else "Event source: live transcription."
+                ),
+                f"Timing settings: pad {pad_seconds:.2f} seconds, context {context_seconds:.2f} seconds, gap {gap_seconds:.2f} seconds.",
+            ]
+        )
+        if preclassification_data:
+            mood = preclassification_data.get("mood")
+            has_foul = preclassification_data.get("has_foul_language", False)
+            word_count = preclassification_data.get("word_count")
+            sentence_count = preclassification_data.get("sentence_count")
+            truthfulness = preclassification_data.get("truthfulness_assessment")
+            style = preclassification_data.get("interaction_style_assessment")
+
+            summary_parts.append("Pre-classification report.")
+
+            # Overview line
+            overview: list[str] = []
+            if isinstance(mood, str) and mood.strip():
+                overview.append(f"mood: {mood.strip()}")
+            foul_str = (
+                "foul language detected" if has_foul else "no foul language detected"
+            )
+            overview.append(foul_str)
+            if isinstance(word_count, int):
+                overview.append(f"{word_count} words")
+            if isinstance(sentence_count, int):
+                overview.append(f"{sentence_count} sentences")
+            if overview:
+                summary_parts.append("Overview: " + "; ".join(overview) + ".")
+
+            # Truthfulness
+            if isinstance(truthfulness, dict):
+                truth_label = truthfulness.get("label", "")
+                truth_confidence = truthfulness.get("confidence_score")
+                truth_reason = truthfulness.get("reason", "")
+                if truth_label:
+                    truth_entry = f"Truthfulness assessment: {truth_label}"
+                    if isinstance(truth_confidence, (int, float)):
+                        truth_entry += f", confidence {float(truth_confidence):.0%}"
+                    if truth_reason:
+                        truth_entry += f". {truth_reason}"
+                    summary_parts.append(truth_entry + ".")
+
+            # Interaction style sub-dimensions
+            if isinstance(style, dict):
+                style_dim_labels = {
+                    "formality": "Formality",
+                    "certainty_hedging": "Certainty hedging",
+                    "persuasion_intent": "Persuasion intent",
+                    "claim_density": "Claim density",
+                }
+                for key, heading in style_dim_labels.items():
+                    item = style.get(key)
+                    if isinstance(item, dict):
+                        lbl = item.get("label")
+                        conf = item.get("confidence_score")
+                        reason = item.get("reason", "")
+                        if isinstance(lbl, str) and lbl.strip():
+                            dim_entry = f"{heading}: {lbl.strip()}"
+                            if isinstance(conf, (int, float)):
+                                dim_entry += f", confidence {float(conf):.0%}"
+                            if reason:
+                                dim_entry += f". {reason}"
+                            summary_parts.append(dim_entry + ".")
+
+                # Speaker sentiment
+                speaker_sentiment = style.get("speaker_sentiment")
+                if isinstance(speaker_sentiment, list) and speaker_sentiment:
+                    first = speaker_sentiment[0]
+                    if isinstance(first, dict):
+                        sentiment = first.get("sentiment")
+                        speaker = first.get("speaker")
+                        conf = first.get("confidence_score")
+                        reason = first.get("reason", "")
+                        if isinstance(sentiment, str) and sentiment.strip():
+                            sent_entry = "Speaker sentiment"
+                            if (
+                                isinstance(speaker, str)
+                                and speaker.strip()
+                                and speaker.strip().lower() != "unknown"
+                            ):
+                                sent_entry += f" ({speaker.strip()})"
+                            sent_entry += f": {sentiment.strip()}"
+                            if isinstance(conf, (int, float)):
+                                sent_entry += f", confidence {float(conf):.0%}"
+                            if reason:
+                                sent_entry += f". {reason}"
+                            summary_parts.append(sent_entry + ".")
+
+        summary_parts.append("Begin event diagnostics.")
+        return " ".join(summary_parts)
+
+    def _build_debug_preclassification_summary(
+        self,
+        *,
+        events: list[dict[str, object]],
+        transcript_text: str | None,
+        preclassification_data: dict[str, object] | None,
+    ) -> str:
+        unique_words = {
+            str(event.get("word", "")).strip().lower()
+            for event in events
+            if str(event.get("word", "")).strip()
+        }
+        avg_duration = 0.0
+        if events:
+            total_duration = 0.0
+            for event in events:
+                start = self._coerce_float(event.get("start_seconds"))
+                end = self._coerce_float(event.get("end_seconds"))
+                total_duration += max(0.0, end - start)
+            avg_duration = total_duration / len(events)
+
+        summary_parts = [
+            "Diagnostic summary.",
+            f"Event count: {len(events)}.",
+            f"Unique matches: {len(unique_words)}.",
+            f"Average event duration: {avg_duration:.2f} seconds.",
+        ]
+
+        if transcript_text:
+            transcript_word_count = len(transcript_text.split())
+            summary_parts.append(
+                f"Transcript words before classification: {transcript_word_count}."
+            )
+
+        if preclassification_data:
+            mood = preclassification_data.get("mood")
+            if isinstance(mood, str) and mood.strip():
+                summary_parts.append(f"Mood: {mood.strip()}.")
+
+            has_foul_language = preclassification_data.get("has_foul_language")
+            if isinstance(has_foul_language, bool):
+                summary_parts.append(
+                    "Foul language signal: " + ("yes." if has_foul_language else "no.")
+                )
+
+            truthfulness = preclassification_data.get("truthfulness_assessment")
+            if isinstance(truthfulness, dict):
+                label = truthfulness.get("label")
+                confidence = truthfulness.get("confidence_score")
+                if isinstance(label, str) and label.strip():
+                    if isinstance(confidence, (int, float)):
+                        summary_parts.append(
+                            f"Truthfulness: {label.strip()} at {float(confidence):.2f} confidence."
+                        )
+                    else:
+                        summary_parts.append(f"Truthfulness: {label.strip()}.")
+
+            style = preclassification_data.get("interaction_style_assessment")
+            if isinstance(style, dict):
+                style_labels: list[str] = []
+                for key in (
+                    "formality",
+                    "certainty_hedging",
+                    "persuasion_intent",
+                    "claim_density",
+                ):
+                    item = style.get(key)
+                    if isinstance(item, dict):
+                        label = item.get("label")
+                        if isinstance(label, str) and label.strip():
+                            style_labels.append(
+                                f"{key.replace('_', ' ')}: {label.strip()}"
+                            )
+                if style_labels:
+                    summary_parts.append("Style: " + "; ".join(style_labels) + ".")
+
+                speaker_sentiment = style.get("speaker_sentiment")
+                if isinstance(speaker_sentiment, list) and speaker_sentiment:
+                    first = speaker_sentiment[0]
+                    if isinstance(first, dict):
+                        sentiment = first.get("sentiment")
+                        speaker = first.get("speaker")
+                        if isinstance(sentiment, str) and sentiment.strip():
+                            if isinstance(speaker, str) and speaker.strip():
+                                summary_parts.append(
+                                    f"Primary sentiment: {speaker.strip()}, {sentiment.strip()}."
+                                )
+                            else:
+                                summary_parts.append(
+                                    f"Primary sentiment: {sentiment.strip()}."
+                                )
+
+        summary_parts.append("End diagnostic summary.")
+        return " ".join(summary_parts)
 
     def _apply_profanity_sound_effects(
         self,
@@ -615,6 +1053,7 @@ class VideoGenerationPipeline:
         content_safety_threshold: float,
         content_safety_model: str | None,
         transcribe_workers: int,
+        profanity_words: set[str] | None = None,
     ) -> str:
         self._last_content_safety_report = None
         report: dict[str, object] | None = None
@@ -654,6 +1093,7 @@ class VideoGenerationPipeline:
                         segment_name=audio_path.name,
                         content_safety_threshold=content_safety_threshold,
                         content_safety_model=content_safety_model,
+                        profanity_words=profanity_words,
                     )
                 self._last_content_safety_report = report
                 full_audio = report.get("full_audio") if report is not None else None
@@ -690,6 +1130,7 @@ class VideoGenerationPipeline:
                             segment_name=audio_path.name,
                             content_safety_threshold=content_safety_threshold,
                             content_safety_model=content_safety_model,
+                            profanity_words=profanity_words,
                         )
                     self._last_content_safety_report = report
                     full_audio = (
@@ -738,6 +1179,7 @@ class VideoGenerationPipeline:
                         segment_name=chunk_path.name,
                         content_safety_threshold=content_safety_threshold,
                         content_safety_model=content_safety_model,
+                        profanity_words=profanity_words,
                     )
                     evaluation["chunk_index"] = chunk_idx
                     if report is not None:
@@ -776,6 +1218,7 @@ class VideoGenerationPipeline:
                         segment_name=audio_path.name,
                         content_safety_threshold=content_safety_threshold,
                         content_safety_model=content_safety_model,
+                        profanity_words=profanity_words,
                     )
                 self._last_content_safety_report = report
                 full_audio = report.get("full_audio") if report is not None else None
@@ -857,6 +1300,7 @@ class VideoGenerationPipeline:
                     segment_name=chunk.name,
                     content_safety_threshold=content_safety_threshold,
                     content_safety_model=content_safety_model,
+                    profanity_words=profanity_words,
                 )
                 evaluation["chunk_index"] = index
                 if report is not None:
@@ -889,12 +1333,16 @@ class VideoGenerationPipeline:
         segment_name: str,
         content_safety_threshold: float,
         content_safety_model: str | None,
+        profanity_words: set[str] | None = None,
     ) -> dict[str, object]:
         if not text.strip():
             return {
                 "segment": segment_name,
                 "text_length": 0,
                 "flagged": False,
+                "ml_flagged": False,
+                "lexicon_flagged": False,
+                "lexicon_matched": [],
                 "unsafe_score": 0.0,
                 "top_label": "",
                 "top_score": 0.0,
@@ -905,10 +1353,18 @@ class VideoGenerationPipeline:
             text, model=content_safety_model
         )
         unsafe_score = float(moderation.get("unsafe_score", 0.0) or 0.0)
+        ml_flagged = unsafe_score >= content_safety_threshold
+
+        lexicon_matched = scan_text_for_profanity(text, profanity_words)
+        lexicon_flagged = bool(lexicon_matched)
+
         return {
             "segment": segment_name,
             "text_length": len(text),
-            "flagged": unsafe_score >= content_safety_threshold,
+            "flagged": ml_flagged or lexicon_flagged,
+            "ml_flagged": ml_flagged,
+            "lexicon_flagged": lexicon_flagged,
+            "lexicon_matched": lexicon_matched,
             "unsafe_score": unsafe_score,
             "top_label": str(moderation.get("top_label", "")),
             "top_score": float(moderation.get("top_score", 0.0) or 0.0),
@@ -965,6 +1421,170 @@ class VideoGenerationPipeline:
             details = f"{details}, {elapsed_seconds:.1f}s"
         self._status(f"{label}: [{bar}] {percent}% ({details})")
 
+    def _synthesize_long_speech(
+        self, text: str, destination: Path, tmp_dir: Path
+    ) -> None:
+        """Synthesize *text* to *destination*, chunking at sentence boundaries.
+
+        Many TTS APIs enforce a ~500-character limit per request.  This helper
+        splits the text into chunks of at most 490 characters (breaking only at
+        sentence endings) and concatenates the resulting audio segments so that
+        the full text is always synthesised regardless of length.
+        """
+        import re as _re
+
+        max_chars = 490
+        sentences = _re.split(r"(?<=\.)\s+", text)
+        chunks: list[str] = []
+        current = ""
+        for sentence in sentences:
+            candidate = (current + " " + sentence).strip() if current else sentence
+            if len(candidate) <= max_chars:
+                current = candidate
+            else:
+                if current:
+                    chunks.append(current)
+                # If a single sentence is itself > max_chars, split it hard
+                if len(sentence) > max_chars:
+                    for i in range(0, len(sentence), max_chars):
+                        chunks.append(sentence[i : i + max_chars])
+                    current = ""
+                else:
+                    current = sentence
+        if current:
+            chunks.append(current)
+
+        if len(chunks) <= 1:
+            self._gateway.synthesize_speech(text, destination)
+            return
+
+        chunk_paths: list[Path] = []
+        for i, chunk in enumerate(chunks):
+            chunk_path = tmp_dir / f"_tts_chunk_{destination.stem}_{i:03d}.wav"
+            self._gateway.synthesize_speech(chunk, chunk_path)
+            chunk_paths.append(chunk_path)
+
+        concat_txt = tmp_dir / f"_tts_concat_{destination.stem}.txt"
+        concat_txt.write_text(
+            "\n".join(f"file '{p.as_posix()}'" for p in chunk_paths), encoding="utf-8"
+        )
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_txt),
+                "-c:a",
+                "pcm_s16le",
+                str(destination),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def _ffmpeg_generate_silence(
+        self, output: Path, *, duration_seconds: float
+    ) -> None:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=24000:cl=mono",
+                "-t",
+                str(duration_seconds),
+                "-c:a",
+                "pcm_s16le",
+                str(output),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def _ffmpeg_normalize_audio(self, input_path: Path, output_path: Path) -> None:
+        """Re-encode to a common PCM WAV format so concat works without gaps."""
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(input_path),
+                "-c:a",
+                "pcm_s16le",
+                "-ar",
+                "24000",
+                "-ac",
+                "1",
+                str(output_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def _ffmpeg_extract_audio_segment(
+        self,
+        audio_path: Path,
+        output_path: Path,
+        *,
+        start_seconds: float,
+        end_seconds: float,
+    ) -> None:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(audio_path),
+                "-ss",
+                f"{start_seconds:.3f}",
+                "-to",
+                f"{end_seconds:.3f}",
+                "-c:a",
+                "pcm_s16le",
+                "-ar",
+                "24000",
+                "-ac",
+                "1",
+                str(output_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def _ffmpeg_extract_bleep(
+        self, sfx_path: Path, output_path: Path, *, duration_seconds: float
+    ) -> None:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(sfx_path),
+                "-t",
+                f"{max(0.1, duration_seconds):.3f}",
+                "-c:a",
+                "pcm_s16le",
+                "-ar",
+                "24000",
+                "-ac",
+                "1",
+                str(output_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
     def _write_manifest(self, run_dir: Path, manifest: dict[str, object]) -> None:
         (run_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2), encoding="utf-8"
@@ -978,9 +1598,24 @@ class VideoGenerationPipeline:
             self._status_callback(message)
 
     @staticmethod
+    def _coerce_float(value: object, default: float = 0.0) -> float:
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return default
+            try:
+                return float(stripped)
+            except ValueError:
+                return default
+        return default
+
+    @staticmethod
     def _starts_with_emoji(value: str) -> bool:
         return value.startswith(
             (
+                "🎤",
                 "🔎",
                 "📁",
                 "🧠",

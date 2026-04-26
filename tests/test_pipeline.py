@@ -642,3 +642,187 @@ def test_missing_video_dependencies_raises(
             video_prompt="Visual direction",
             output_path=tmp_path / "out.mp4",
         )
+
+
+# ---------------------------------------------------------------------------
+# Combined lexicon + ML content safety tests
+# ---------------------------------------------------------------------------
+
+
+def _make_safety_pipeline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> "VideoGenerationPipeline":
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    return VideoGenerationPipeline(_config(tmp_path))
+
+
+def _lexicon_file(tmp_path: Path, words: list[str]) -> Path:
+    """Write a profanity words file and return its path."""
+    path = tmp_path / "profanity_words.txt"
+    path.write_text("\n".join(words), encoding="utf-8")
+    return path
+
+
+def test_content_safety_lexicon_only_flagging(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Lexicon word in transcript with ML score below threshold → lexicon_flagged only."""
+    pipeline = _make_safety_pipeline(monkeypatch, tmp_path)
+    audio_path = tmp_path / "input.m4a"
+    audio_path.write_bytes(b"audio")
+    # FakeGateway.transcribe_audio returns "transcribed input"
+    # FakeGateway.classify_content_safety returns unsafe_score=0.05 for this text
+    words_file = _lexicon_file(tmp_path, ["input"])
+
+    pipeline.transcribe_audio_file(
+        audio_path=audio_path,
+        chunk_seconds=0,
+        content_safety_enabled=True,
+        content_safety_filter=False,
+        content_safety_threshold=0.5,  # 0.05 < 0.5 → ML not flagged
+        profanity_words_file=words_file,
+    )
+
+    report = pipeline._last_content_safety_report
+    assert report is not None
+    full_audio = report["full_audio"]
+    assert isinstance(full_audio, dict)
+    assert full_audio["flagged"] is True
+    assert full_audio["ml_flagged"] is False
+    assert full_audio["lexicon_flagged"] is True
+    assert "input" in full_audio["lexicon_matched"]
+
+
+def test_content_safety_ml_only_flagging(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """ML score above threshold with no lexicon match → ml_flagged only."""
+    pipeline = _make_safety_pipeline(monkeypatch, tmp_path)
+    audio_path = tmp_path / "input.m4a"
+    audio_path.write_bytes(b"audio")
+    # FakeGateway.classify_content_safety returns unsafe_score=0.05
+    # Set threshold below that to trigger ML flag
+    words_file = _lexicon_file(tmp_path, ["xyznotaword"])
+
+    pipeline.transcribe_audio_file(
+        audio_path=audio_path,
+        chunk_seconds=0,
+        content_safety_enabled=True,
+        content_safety_filter=False,
+        content_safety_threshold=0.01,  # 0.05 >= 0.01 → ML flagged
+        profanity_words_file=words_file,
+    )
+
+    report = pipeline._last_content_safety_report
+    assert report is not None
+    full_audio = report["full_audio"]
+    assert isinstance(full_audio, dict)
+    assert full_audio["flagged"] is True
+    assert full_audio["ml_flagged"] is True
+    assert full_audio["lexicon_flagged"] is False
+    assert full_audio["lexicon_matched"] == []
+
+
+def test_content_safety_both_ml_and_lexicon_flagging(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Both ML and lexicon signals trigger → flagged, ml_flagged, lexicon_flagged all True."""
+    pipeline = _make_safety_pipeline(monkeypatch, tmp_path)
+    audio_path = tmp_path / "input.m4a"
+    audio_path.write_bytes(b"audio")
+    words_file = _lexicon_file(tmp_path, ["input"])
+
+    pipeline.transcribe_audio_file(
+        audio_path=audio_path,
+        chunk_seconds=0,
+        content_safety_enabled=True,
+        content_safety_filter=False,
+        content_safety_threshold=0.01,  # ML triggers; lexicon "input" also matches
+        profanity_words_file=words_file,
+    )
+
+    report = pipeline._last_content_safety_report
+    assert report is not None
+    full_audio = report["full_audio"]
+    assert isinstance(full_audio, dict)
+    assert full_audio["flagged"] is True
+    assert full_audio["ml_flagged"] is True
+    assert full_audio["lexicon_flagged"] is True
+    assert "input" in full_audio["lexicon_matched"]
+
+
+def test_content_safety_neither_signal_flagging(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No ML trigger and no lexicon match → all flagging fields False."""
+    pipeline = _make_safety_pipeline(monkeypatch, tmp_path)
+    audio_path = tmp_path / "input.m4a"
+    audio_path.write_bytes(b"audio")
+    words_file = _lexicon_file(tmp_path, ["xyznotaword"])
+
+    pipeline.transcribe_audio_file(
+        audio_path=audio_path,
+        chunk_seconds=0,
+        content_safety_enabled=True,
+        content_safety_filter=False,
+        content_safety_threshold=0.5,
+        profanity_words_file=words_file,
+    )
+
+    report = pipeline._last_content_safety_report
+    assert report is not None
+    full_audio = report["full_audio"]
+    assert isinstance(full_audio, dict)
+    assert full_audio["flagged"] is False
+    assert full_audio["ml_flagged"] is False
+    assert full_audio["lexicon_flagged"] is False
+    assert full_audio["lexicon_matched"] == []
+
+
+def test_content_safety_chunk_lexicon_flagging_filters_chunk(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Lexicon word in a chunk causes that chunk to be filtered when filter is enabled."""
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    pipeline = VideoGenerationPipeline(_config(tmp_path))
+    audio_path = tmp_path / "input.m4a"
+    audio_path.write_bytes(b"audio")
+    # FakeGateway chunks return "transcribed chunk_0000" and "transcribed chunk_0001"
+    # ML: unsafe_score=0.95 for chunk_0001; 0.05 for chunk_0000
+    # Set threshold high (0.99) so ML does NOT flag either chunk.
+    # Lexicon contains "chunk_0001" so lexicon flags chunk_0001 only.
+    words_file = _lexicon_file(tmp_path, ["chunk_0001"])
+
+    statuses: list[str] = []
+    pipeline._status_callback = statuses.append
+
+    text = pipeline.transcribe_audio_file(
+        audio_path=audio_path,
+        chunk_seconds=45.0,
+        content_safety_enabled=True,
+        content_safety_filter=True,
+        content_safety_threshold=0.99,
+        profanity_words_file=words_file,
+    )
+
+    assert text == "transcribed chunk_0000"
+    report = pipeline._last_content_safety_report
+    assert report is not None
+    assert report["dropped_chunks"] == 1
+    chunks = report["chunks"]
+    assert isinstance(chunks, list)
+    flagged_chunks = [c for c in chunks if c["lexicon_flagged"]]
+    assert len(flagged_chunks) == 1
+    # Digits are leet-normalised during scanning so the matched entry is the
+    # normalised form; just assert at least one lexicon entry was recorded.
+    assert len(flagged_chunks[0]["lexicon_matched"]) > 0

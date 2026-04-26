@@ -30,6 +30,10 @@ class FakePipeline:
             output_path.write_text("sample transcript", encoding="utf-8")
         return "sample transcript"
 
+    def build_profanity_debug_audio(self, **kwargs):
+        self.calls.append(("profanity_debug", (), kwargs))
+        return 2
+
 
 def test_transcribe_command_writes_output_file(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
@@ -129,6 +133,65 @@ def test_transcribe_profanity_sfx_passes_options(monkeypatch, tmp_path: Path) ->
     assert call_kwargs["profanity_sfx_output_path"] == output_audio
     assert call_kwargs["profanity_pad_seconds"] == pytest.approx(0.12)
     assert call_kwargs["profanity_duck_db"] == pytest.approx(-10.0)
+
+
+def test_profanity_debug_passes_manifest_and_timing_options(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "audio.m4a"
+    audio_file.write_bytes(b"audio")
+    output_file = tmp_path / "debug.m4a"
+    manifest_file = tmp_path / "manifest.json"
+    manifest_file.write_text(
+        '{"profanity_sfx":{"events":[{"word":"heck","start_seconds":1.2,"end_seconds":1.8,"sfx":"/tmp/beep.wav","sfx_duration_seconds":0.6}]},"video_prompt_preclassification":{"mood":"serious"},"narration_text":"example transcript"}',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "profanity-debug",
+            "--audio-file",
+            str(audio_file),
+            "--output",
+            str(output_file),
+            "--manifest",
+            str(manifest_file),
+            "--profanity-pad-ms",
+            "125",
+            "--context-seconds",
+            "0.75",
+            "--gap-seconds",
+            "0.4",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Loaded 1 event(s) from manifest" in result.output
+    assert "Debug audio with 2 event(s) written" in result.output
+
+    call_kwargs = fake_pipeline.calls[0][2]
+    assert fake_pipeline.calls[0][0] == "profanity_debug"
+    assert call_kwargs["audio_path"] == audio_file
+    assert call_kwargs["output_path"] == output_file
+    assert call_kwargs["manifest_events"] == [
+        {
+            "word": "heck",
+            "start_seconds": 1.2,
+            "end_seconds": 1.8,
+            "sfx": "/tmp/beep.wav",
+            "sfx_duration_seconds": 0.6,
+        }
+    ]
+    assert call_kwargs["preclassification_data"] == {"mood": "serious"}
+    assert call_kwargs["transcript_text"] == "example transcript"
+    assert call_kwargs["pad_seconds"] == pytest.approx(0.125)
+    assert call_kwargs["context_seconds"] == pytest.approx(0.75)
+    assert call_kwargs["gap_seconds"] == pytest.approx(0.4)
 
 
 def test_global_debug_flag_prints_message(monkeypatch, tmp_path: Path) -> None:

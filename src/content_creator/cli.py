@@ -888,3 +888,153 @@ def lexicon_doctor(
             click.echo("✅ No duplicates detected.")
 
     _run_with_debug(ctx, _operation)
+
+
+@cli.command("profanity-debug")
+@click.option(
+    "--audio-file",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Source audio file containing the speech to inspect.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    required=True,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Path for the generated debug audio file (e.g. debug.m4a).",
+)
+@click.option(
+    "--manifest",
+    "manifest_path",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help=(
+        "Path to an existing manifest.json whose profanity_sfx.events are used "
+        "instead of re-running STT transcription."
+    ),
+)
+@click.option(
+    "--profanity-words-file",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help=(
+        "Optional profanity lexicon file; defaults to bundled data/profanity_words.txt. "
+        "Ignored when --manifest is provided."
+    ),
+)
+@click.option(
+    "--profanity-sound-pack-dir",
+    default=None,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help=(
+        "Directory containing sound effect files for bleep generation. "
+        "Ignored when --manifest is provided."
+    ),
+)
+@click.option(
+    "--profanity-pad-ms",
+    default=80,
+    show_default=True,
+    type=click.IntRange(0, None),
+    help="Padding around each profane word in milliseconds. Ignored when --manifest is provided.",
+)
+@click.option(
+    "--context-seconds",
+    default=0.5,
+    show_default=True,
+    type=click.FloatRange(0.0, None),
+    help="Seconds of original audio captured before and after each event snippet.",
+)
+@click.option(
+    "--gap-seconds",
+    default=0.3,
+    show_default=True,
+    type=click.FloatRange(0.0, None),
+    help="Duration of silence inserted between audio sections within each event.",
+)
+@click.option("--work-dir", default=None, help="Directory for intermediate assets.")
+@click.pass_context
+def profanity_debug(
+    ctx: click.Context,
+    audio_file: Path,
+    output_path: Path,
+    manifest_path: Path | None,
+    profanity_words_file: Path | None,
+    profanity_sound_pack_dir: Path | None,
+    profanity_pad_ms: int,
+    context_seconds: float,
+    gap_seconds: float,
+    work_dir: str | None,
+) -> None:
+    """Generate a debug audio file illustrating each detected profanity event.
+
+    For every event the output contains:
+    a synthesized voice announcing the detected word with start/end/duration;
+    the raw audio snippet from the source; a synthesized voice saying
+    "Profanity filter implemented"; and the exact bleep production would overlay.
+
+    Use --manifest to skip re-transcription and load events from an existing
+    manifest.json produced by the transcribe command.
+    """
+
+    def _operation() -> None:
+        import json as _json
+
+        manifest_events: list[dict[str, object]] | None = None
+        preclassification_data: dict[str, object] | None = None
+        transcript_text: str | None = None
+        if manifest_path is not None:
+            payload = _json.loads(manifest_path.read_text(encoding="utf-8"))
+            sfx_section = payload.get("profanity_sfx", {})
+            if not isinstance(sfx_section, dict):
+                raise click.ClickException(
+                    "Manifest does not contain a 'profanity_sfx' section."
+                )
+            raw_events = sfx_section.get("events", [])
+            if not isinstance(raw_events, list):
+                raise click.ClickException(
+                    "Manifest 'profanity_sfx.events' is not a list."
+                )
+            manifest_events = [e for e in raw_events if isinstance(e, dict)]
+            raw_preclassification = payload.get("video_prompt_preclassification")
+            if isinstance(raw_preclassification, dict):
+                preclassification_data = raw_preclassification
+            raw_transcript_text = payload.get("narration_text")
+            if isinstance(raw_transcript_text, str) and raw_transcript_text.strip():
+                transcript_text = raw_transcript_text.strip()
+            click.echo(
+                f"📋 Loaded {len(manifest_events)} event(s) from manifest: {manifest_path}"
+            )
+
+        pipeline = _build_pipeline(
+            work_dir=work_dir,
+            debug=bool(ctx.obj.get("debug", False)),
+            status_callback=_make_status_callback(
+                progress_enabled=bool(ctx.obj.get("progress", True))
+            ),
+            llm_model=ctx.obj.get("llm_model"),
+            stt_model=ctx.obj.get("stt_model"),
+            tts_model=ctx.obj.get("tts_model"),
+            image_model=ctx.obj.get("image_model"),
+        )
+        event_count = pipeline.build_profanity_debug_audio(
+            audio_path=audio_file,
+            output_path=output_path,
+            manifest_events=manifest_events,
+            preclassification_data=preclassification_data,
+            transcript_text=transcript_text,
+            sound_pack_dir=profanity_sound_pack_dir,
+            profanity_words_file=profanity_words_file,
+            pad_seconds=profanity_pad_ms / 1000.0,
+            context_seconds=context_seconds,
+            gap_seconds=gap_seconds,
+        )
+        if event_count == 0:
+            click.echo("ℹ️ No profanity events found — no debug audio generated.")
+        else:
+            click.echo(
+                f"✅ Debug audio with {event_count} event(s) written to: {output_path}"
+            )
+
+    _run_with_debug(ctx, _operation)
