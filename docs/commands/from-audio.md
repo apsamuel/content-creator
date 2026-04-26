@@ -29,6 +29,7 @@ Use `from-audio` when you already have narration audio and want matching visuals
   - `--generate-video-prompt`
 - Optional:
   - `--image-workers INTEGER` (default `HF_IMAGE_WORKERS` or `1`)
+  - `--images-per-scene INTEGER` (default `HF_IMAGES_PER_SCENE` or `1`)
   - `--chunk-seconds FLOAT` (default `45.0`; set to `0` to disable chunking)
   - `--transcribe-workers INTEGER` (default `HF_TRANSCRIBE_WORKERS` or `1`)
   - `--preserve-speaker / --no-preserve-speaker` (default `--no-preserve-speaker`)
@@ -62,6 +63,7 @@ Use `from-audio` when you already have narration audio and want matching visuals
 - If `--content-safety-filter` is also enabled, flagged chunks are dropped before scene planning.
 - If `--profanity-sfx` is enabled, word-level timestamps are used to replace profane words in final audio with effects from the selected sound pack.
 - `--image-workers` controls parallel scene image generation after planning completes.
+- `--images-per-scene` controls how many coherent image variants are generated per scene clip before ffmpeg assembly.
 - `--view-preclassification` prints the planner's preclassification block after LLM analysis.
 
 ## Mechanism Flow
@@ -119,6 +121,7 @@ Use explicit worker counts and print preclassification details:
 content-creator from-audio \
   --audio-file ./assets/voiceover.mp3 \
   --generate-video-prompt \
+  --images-per-scene 3 \
   --transcribe-workers 3 \
   --image-workers 2 \
   --view-preclassification \

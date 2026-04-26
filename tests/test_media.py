@@ -98,6 +98,55 @@ def test_render_video_builds_concat_and_invokes_ffmpeg(
     assert "+faststart" in final_mux_call
 
 
+def test_render_video_supports_multiple_images_per_scene(
+    monkeypatch, tmp_path: Path
+) -> None:
+    assembler = MediaAssembler(width=1280, height=720, fps=24)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    image1 = tmp_path / "img1.png"
+    image2 = tmp_path / "img2.png"
+    image3 = tmp_path / "img3.png"
+    image4 = tmp_path / "img4.png"
+    image1.write_bytes(b"1")
+    image2.write_bytes(b"2")
+    image3.write_bytes(b"3")
+    image4.write_bytes(b"4")
+
+    scenes = [
+        Scene(index=1, prompt="A", duration_seconds=1.0),
+        Scene(index=2, prompt="B", duration_seconds=1.0),
+    ]
+    audio_path = tmp_path / "audio.wav"
+    audio_path.write_bytes(b"audio")
+    output_path = tmp_path / "final-seq.mp4"
+
+    calls: list[list[str]] = []
+
+    def _run(command, check, capture_output, text):
+        calls.append(command)
+        if command[0] == "ffmpeg":
+            Path(command[-1]).write_bytes(b"out")
+        return Completed(stdout="")
+
+    monkeypatch.setattr(subprocess, "run", _run)
+
+    result = assembler.render_video(
+        images=[[image1, image2], [image3, image4]],
+        scenes=scenes,
+        audio_path=audio_path,
+        output_path=output_path,
+        work_dir=work_dir,
+    )
+
+    assert result == output_path
+    assert output_path.exists()
+    ffmpeg_calls = [command for command in calls if command[0] == "ffmpeg"]
+    # 4 segment renders + 2 per-scene sequence concats + 1 scene-stitch concat + 1 final mux
+    assert len(ffmpeg_calls) == 8
+
+
 def test_chunk_audio_invokes_ffmpeg_and_returns_segments(
     monkeypatch, tmp_path: Path
 ) -> None:

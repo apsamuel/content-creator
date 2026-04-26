@@ -998,6 +998,59 @@ def test_from_audio_passes_image_workers(monkeypatch, tmp_path: Path) -> None:
     assert fake_pipeline.calls[0][2]["image_workers"] == 4
 
 
+def test_from_text_passes_images_per_scene(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-text",
+            "--text-transcription",
+            "Narration",
+            "--video-prompt",
+            "Style",
+            "--images-per-scene",
+            "3",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["images_per_scene"] == 3
+
+
+def test_from_audio_passes_images_per_scene(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-audio",
+            "--audio-file",
+            str(audio_file),
+            "--video-prompt",
+            "Style",
+            "--images-per-scene",
+            "4",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["images_per_scene"] == 4
+
+
 def test_from_text_uses_hf_image_workers_env_default(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -1051,6 +1104,61 @@ def test_from_audio_uses_hf_image_workers_env_default(
 
     assert result.exit_code == 0, result.output
     assert fake_pipeline.calls[0][2]["image_workers"] == 2
+
+
+def test_from_text_uses_hf_images_per_scene_env_default(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setenv("HF_IMAGES_PER_SCENE", "2")
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-text",
+            "--text-transcription",
+            "Narration",
+            "--video-prompt",
+            "Style",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["images_per_scene"] == 2
+
+
+def test_from_audio_uses_hf_images_per_scene_env_default(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setenv("HF_IMAGES_PER_SCENE", "3")
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-audio",
+            "--audio-file",
+            str(audio_file),
+            "--video-prompt",
+            "Style",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["images_per_scene"] == 3
 
 
 def test_from_audio_passes_content_safety_options(monkeypatch, tmp_path: Path) -> None:

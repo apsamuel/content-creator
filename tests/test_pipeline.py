@@ -394,6 +394,40 @@ def test_generate_from_text_uses_threaded_image_workers(
     assert any("Using 2 workers for image generation" in msg for msg in statuses)
 
 
+def test_generate_from_text_generates_multiple_images_per_scene(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    pipeline = VideoGenerationPipeline(_config(tmp_path))
+    output_path = tmp_path / "out" / "multi-images.mp4"
+
+    result = pipeline.generate_from_text(
+        narration_text="Narration",
+        video_prompt="Video direction",
+        output_path=output_path,
+        images_per_scene=3,
+    )
+
+    assert result == output_path
+    assert output_path.exists()
+    assert len(pipeline._gateway.generated_images) == 6
+    assert len(pipeline._planner.prepared_image_prompts) == 6
+    assert "Frame 1/3" in pipeline._gateway.generated_images[0][0]
+
+    manifest_path = _config(tmp_path).work_dir / output_path.stem / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["images_per_scene"] == 3
+    assert len(manifest["images"]) == 6
+    assert len(manifest["scenes"][0]["prepared_prompts"]) == 3
+    assert len(manifest["scenes"][1]["prepared_prompts"]) == 3
+
+
 def test_generate_from_text_can_generate_video_prompt(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

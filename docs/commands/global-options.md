@@ -88,6 +88,7 @@ The gateway retries on rate limits (`429`) and transient server/network errors u
 - `HF_IMAGE_NEGATIVE_PROMPT` sets the default negative prompt appended to every Hugging Face text-to-image request.
 - `HF_IMAGE_COMPOSITION_MODE` sets the planner's default composition rotation. Supported values: `balanced`, `dynamic`, `portrait`, `establishing`.
 - `HF_IMAGE_WORKERS` sets the default image worker count used by `from-text` and `from-audio` when `--image-workers` is omitted.
+- `HF_IMAGES_PER_SCENE` sets the default number of generated image variants per scene used by `from-text` and `from-audio` when `--images-per-scene` is omitted.
 
 Use `HF_IMAGE_NEGATIVE_PROMPT` to suppress recurring artifacts globally instead of repeating negative terms in every scene prompt. The default preset targets blur, anatomy mistakes, duplicate limbs, text overlays, watermarks, borders, photorealism, flat lighting, and muddy colors.
 

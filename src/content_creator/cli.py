@@ -282,6 +282,13 @@ def cli(
     type=click.IntRange(1, None),
     help="Number of worker threads for scene image generation (default: HF_IMAGE_WORKERS or 1).",
 )
+@click.option(
+    "--images-per-scene",
+    default=None,
+    show_default=False,
+    type=click.IntRange(1, None),
+    help="Number of images generated per scene clip (default: HF_IMAGES_PER_SCENE or 1).",
+)
 @click.option("--work-dir", default=None, help="Directory for intermediate assets.")
 @click.option(
     "--view-preclassification/--no-view-preclassification",
@@ -297,6 +304,7 @@ def from_text(
     generate_video_prompt: bool,
     output_path: Path,
     image_workers: int | None,
+    images_per_scene: int | None,
     work_dir: str | None,
     view_preclassification: bool,
 ) -> None:
@@ -313,6 +321,11 @@ def from_text(
         )
         resolved_image_workers = _resolve_worker_count(
             image_workers, env_var="HF_IMAGE_WORKERS", option_name="--image-workers"
+        )
+        resolved_images_per_scene = _resolve_worker_count(
+            images_per_scene,
+            env_var="HF_IMAGES_PER_SCENE",
+            option_name="--images-per-scene",
         )
         pipeline = _build_pipeline(
             work_dir=work_dir,
@@ -331,6 +344,7 @@ def from_text(
             generate_video_prompt=generate_video_prompt,
             output_path=output_path,
             image_workers=resolved_image_workers,
+            images_per_scene=resolved_images_per_scene,
             view_preclassification=view_preclassification,
         )
         click.echo(f"✅ Video written to {result}")
@@ -367,6 +381,13 @@ def from_text(
     show_default=False,
     type=click.IntRange(1, None),
     help="Number of worker threads for scene image generation (default: HF_IMAGE_WORKERS or 1).",
+)
+@click.option(
+    "--images-per-scene",
+    default=None,
+    show_default=False,
+    type=click.IntRange(1, None),
+    help="Number of images generated per scene clip (default: HF_IMAGES_PER_SCENE or 1).",
 )
 @click.option(
     "--chunk-seconds",
@@ -496,6 +517,7 @@ def from_audio(
     generate_video_prompt: bool,
     output_path: Path,
     image_workers: int | None,
+    images_per_scene: int | None,
     chunk_seconds: float,
     transcribe_workers: int | None,
     preserve_speaker: bool,
@@ -525,6 +547,11 @@ def from_audio(
         )
         resolved_image_workers = _resolve_worker_count(
             image_workers, env_var="HF_IMAGE_WORKERS", option_name="--image-workers"
+        )
+        resolved_images_per_scene = _resolve_worker_count(
+            images_per_scene,
+            env_var="HF_IMAGES_PER_SCENE",
+            option_name="--images-per-scene",
         )
         resolved_transcribe_workers = _resolve_worker_count(
             transcribe_workers,
@@ -558,6 +585,7 @@ def from_audio(
             generate_video_prompt=generate_video_prompt,
             output_path=output_path,
             image_workers=resolved_image_workers,
+            images_per_scene=resolved_images_per_scene,
             chunk_seconds=chunk_seconds,
             transcribe_workers=resolved_transcribe_workers,
             preserve_speaker=preserve_speaker,

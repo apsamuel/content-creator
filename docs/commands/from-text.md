@@ -29,6 +29,7 @@ Use `from-text` when you have script text and want the tool to generate both aud
   - `--generate-video-prompt`
 - Optional:
   - `--image-workers INTEGER` (default `HF_IMAGE_WORKERS` or `1`)
+  - `--images-per-scene INTEGER` (default `HF_IMAGES_PER_SCENE` or `1`)
   - `--work-dir TEXT`
   - `--view-preclassification / --no-view-preclassification` (default `--no-view-preclassification`)
 
@@ -46,6 +47,7 @@ The CLI loads and validates the file contents before running the pipeline.
 ## Worker and analysis behavior
 
 - `--image-workers` controls parallel scene image generation. If omitted, the command falls back to `HF_IMAGE_WORKERS`, then `1`.
+- `--images-per-scene` controls how many coherent image variants are generated for each scene to improve visual fluidity. If omitted, the command falls back to `HF_IMAGES_PER_SCENE`, then `1`.
 - `--view-preclassification` prints the planner's video-prompt preclassification block after LLM analysis so you can inspect mood, tone, and safety-related metadata before reviewing `manifest.json`.
 
 ## Mechanism Flow
@@ -93,6 +95,7 @@ Use two image workers and print preclassification details:
 content-creator from-text \
   --text-transcription file://prompts/narration.txt \
   --generate-video-prompt \
+  --images-per-scene 3 \
   --image-workers 2 \
   --view-preclassification \
   --output ./output/generated-style.mp4

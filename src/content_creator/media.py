@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -77,7 +78,7 @@ class MediaAssembler:
     def render_video(
         self,
         *,
-        images: Iterable[Path],
+        images: Iterable[Path] | Iterable[Iterable[Path]],
         scenes: list[Scene],
         audio_path: Path,
         output_path: Path,
@@ -87,13 +88,37 @@ class MediaAssembler:
         clips_dir.mkdir(parents=True, exist_ok=True)
         clip_paths: list[Path] = []
 
-        for scene, image_path in zip(scenes, images, strict=True):
-            clip_path = clips_dir / f"scene_{scene.index:02d}.mp4"
-            self._render_scene_clip(
-                image_path=image_path,
-                duration=scene.duration_seconds,
-                output_path=clip_path,
+        image_items = list(images)
+        scene_image_sequences: list[list[Path]]
+        if image_items and all(isinstance(item, Path) for item in image_items):
+            scene_image_sequences = [[item] for item in image_items]
+        else:
+            scene_image_sequences = [
+                [Path(path) for path in image_group] for image_group in image_items
+            ]
+
+        if len(scene_image_sequences) != len(scenes):
+            raise ValueError(
+                "Number of scene image groups must match number of scenes "
+                f"({len(scene_image_sequences)} != {len(scenes)})"
             )
+
+        for scene, scene_images in zip(scenes, scene_image_sequences, strict=True):
+            if not scene_images:
+                raise ValueError(f"Scene {scene.index} has no images to render")
+            clip_path = clips_dir / f"scene_{scene.index:02d}.mp4"
+            if len(scene_images) == 1:
+                self._render_scene_clip(
+                    image_path=scene_images[0],
+                    duration=scene.duration_seconds,
+                    output_path=clip_path,
+                )
+            else:
+                self._render_scene_sequence_clip(
+                    image_paths=scene_images,
+                    duration=scene.duration_seconds,
+                    output_path=clip_path,
+                )
             clip_paths.append(clip_path)
 
         concat_list = work_dir / "concat.txt"
@@ -223,13 +248,14 @@ class MediaAssembler:
     def _render_scene_clip(
         self, *, image_path: Path, duration: float, output_path: Path
     ) -> None:
+        frame_count = max(1, int(round(duration * self._fps)))
         zoom_expr = (
             "zoom='min(zoom+0.0008,1.08)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
         )
         vf = (
             f"scale={self._width}:{self._height}:force_original_aspect_ratio=increase,"
             f"crop={self._width}:{self._height},"
-            f"zoompan={zoom_expr}:d={int(duration * self._fps)}:s={self._width}x{self._height}:fps={self._fps},"
+            f"zoompan={zoom_expr}:d={frame_count}:s={self._width}x{self._height}:fps={self._fps},"
             "format=yuv420p"
         )
         subprocess.run(
@@ -255,3 +281,49 @@ class MediaAssembler:
             capture_output=True,
             text=True,
         )
+
+    def _render_scene_sequence_clip(
+        self, *, image_paths: list[Path], duration: float, output_path: Path
+    ) -> None:
+        segment_count = len(image_paths)
+        if segment_count <= 0:
+            raise ValueError("image_paths must contain at least one image")
+
+        min_duration = 1.0 / max(1, self._fps)
+        split_duration = max(min_duration, duration / segment_count)
+
+        with tempfile.TemporaryDirectory(prefix="scene_seq_") as tmp_str:
+            tmp_dir = Path(tmp_str)
+            partial_clips: list[Path] = []
+            for index, image_path in enumerate(image_paths, start=1):
+                partial_path = tmp_dir / f"segment_{index:02d}.mp4"
+                self._render_scene_clip(
+                    image_path=image_path,
+                    duration=split_duration,
+                    output_path=partial_path,
+                )
+                partial_clips.append(partial_path)
+
+            concat_list = tmp_dir / "concat.txt"
+            concat_list.write_text(
+                "\n".join(f"file '{path.as_posix()}'" for path in partial_clips),
+                encoding="utf-8",
+            )
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    str(concat_list),
+                    "-c",
+                    "copy",
+                    str(output_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )

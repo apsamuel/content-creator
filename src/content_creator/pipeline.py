@@ -70,6 +70,7 @@ class VideoGenerationPipeline:
         output_path: Path,
         generate_video_prompt: bool = False,
         image_workers: int = 1,
+        images_per_scene: int = 1,
         view_preclassification: bool = False,
     ) -> Path:
         self._ensure_video_dependencies()
@@ -83,6 +84,7 @@ class VideoGenerationPipeline:
             "narration_text": narration_text,
             "video_prompt": video_prompt,
             "generate_video_prompt": generate_video_prompt,
+            "images_per_scene": images_per_scene,
         }
         self._write_manifest(run_dir, manifest)
         audio_path = run_dir / "narration.wav"
@@ -106,6 +108,7 @@ class VideoGenerationPipeline:
             run_dir=run_dir,
             manifest=manifest,
             image_workers=image_workers,
+            images_per_scene=images_per_scene,
             view_preclassification=view_preclassification,
         )
 
@@ -133,6 +136,7 @@ class VideoGenerationPipeline:
         profanity_duck_db: float = -42.0,
         transcribe_workers: int = 1,
         image_workers: int = 1,
+        images_per_scene: int = 1,
         view_preclassification: bool = False,
     ) -> Path:
         self._ensure_video_dependencies()
@@ -165,6 +169,7 @@ class VideoGenerationPipeline:
             "profanity_duck_db": profanity_duck_db,
             "transcribe_workers": transcribe_workers,
             "image_workers": image_workers,
+            "images_per_scene": images_per_scene,
             "generate_video_prompt": generate_video_prompt,
             "video_prompt": video_prompt,
         }
@@ -230,6 +235,7 @@ class VideoGenerationPipeline:
             run_dir=run_dir,
             manifest=manifest,
             image_workers=image_workers,
+            images_per_scene=images_per_scene,
             view_preclassification=view_preclassification,
         )
 
@@ -806,6 +812,7 @@ class VideoGenerationPipeline:
         run_dir: Path,
         manifest: dict[str, object] | None = None,
         image_workers: int = 1,
+        images_per_scene: int = 1,
         view_preclassification: bool = False,
     ) -> Path:
         if manifest is None:
@@ -904,69 +911,113 @@ class VideoGenerationPipeline:
         self._status(f"🧩 Planned {len(scenes)} scenes")
         images_dir = run_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
-        image_paths = []
+        scene_images_per_scene = max(1, images_per_scene)
         manifest["status"] = "generating_images"
         manifest["images"] = []
+        manifest["images_per_scene"] = scene_images_per_scene
         self._write_manifest(run_dir, manifest)
         self._status("🖼️ Generating images for scenes")
         total_scenes = len(scenes)
         worker_count = max(1, image_workers)
+        total_images = total_scenes * scene_images_per_scene
 
         def _render_scene_image(
-            scene_index: int, scene_prompt: str
-        ) -> tuple[int, Path, float, str]:
+            scene_index: int, scene_prompt: str, frame_index: int
+        ) -> tuple[int, int, Path, float, str]:
             start = perf_counter()
-            destination = images_dir / f"scene_{scene_index:02d}.png"
-            prepared_prompt = self._planner.prepare_image_prompt(
-                scene_prompt, scene_index=scene_index - 1, total_scenes=total_scenes
+            destination = (
+                images_dir / f"scene_{scene_index:02d}_frame_{frame_index + 1:02d}.png"
+            )
+            prepared_prompt = self._build_scene_frame_prompt(
+                scene_prompt=scene_prompt,
+                scene_index=scene_index,
+                total_scenes=total_scenes,
+                frame_index=frame_index,
+                frames_per_scene=scene_images_per_scene,
             )
             self._gateway.generate_image(prepared_prompt, destination)
-            return scene_index, destination, perf_counter() - start, prepared_prompt
+            return (
+                scene_index,
+                frame_index,
+                destination,
+                perf_counter() - start,
+                prepared_prompt,
+            )
 
-        rendered_paths: dict[int, Path] = {}
-        rendered_prepared_prompts: dict[int, str] = {}
+        rendered_paths: dict[int, dict[int, Path]] = {}
+        rendered_prepared_prompts: dict[int, dict[int, str]] = {}
         completed = 0
 
         if worker_count == 1:
             for scene in scenes:
-                if self._debug:
-                    self._status(
-                        f"🐛 Rendering image for scene {scene.index}/{len(scenes)}"
+                for frame_index in range(scene_images_per_scene):
+                    if self._debug:
+                        self._status(
+                            "🐛 Rendering image for "
+                            f"scene {scene.index}/{len(scenes)} "
+                            f"frame {frame_index + 1}/{scene_images_per_scene}"
+                        )
+                    (
+                        scene_index,
+                        rendered_frame_index,
+                        image_path,
+                        elapsed,
+                        prepared,
+                    ) = _render_scene_image(scene.index, scene.prompt, frame_index)
+                    rendered_paths.setdefault(scene_index, {})[
+                        rendered_frame_index
+                    ] = image_path
+                    rendered_prepared_prompts.setdefault(scene_index, {})[
+                        rendered_frame_index
+                    ] = prepared
+                    completed += 1
+                    self._emit_progress(
+                        "📷 Image generation progress",
+                        current=completed,
+                        total=total_images,
+                        elapsed_seconds=elapsed,
                     )
-                scene_index, image_path, elapsed, prepared = _render_scene_image(
-                    scene.index, scene.prompt
-                )
-                rendered_paths[scene_index] = image_path
-                rendered_prepared_prompts[scene_index] = prepared
-                completed += 1
-                self._emit_progress(
-                    "📷 Image generation progress",
-                    current=completed,
-                    total=total_scenes,
-                    elapsed_seconds=elapsed,
-                )
         else:
             self._status(f"🧵 Using {worker_count} workers for image generation")
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
                 futures = {
                     executor.submit(
-                        _render_scene_image, scene.index, scene.prompt
-                    ): scene
+                        _render_scene_image, scene.index, scene.prompt, frame_index
+                    ): (scene.index, frame_index)
                     for scene in scenes
+                    for frame_index in range(scene_images_per_scene)
                 }
                 for future in as_completed(futures):
-                    scene_index, image_path, elapsed, prepared = future.result()
-                    rendered_paths[scene_index] = image_path
-                    rendered_prepared_prompts[scene_index] = prepared
+                    (
+                        scene_index,
+                        rendered_frame_index,
+                        image_path,
+                        elapsed,
+                        prepared,
+                    ) = future.result()
+                    rendered_paths.setdefault(scene_index, {})[
+                        rendered_frame_index
+                    ] = image_path
+                    rendered_prepared_prompts.setdefault(scene_index, {})[
+                        rendered_frame_index
+                    ] = prepared
                     completed += 1
                     self._emit_progress(
                         "📷 Image generation progress",
                         current=completed,
-                        total=total_scenes,
+                        total=total_images,
                         elapsed_seconds=elapsed,
                     )
 
-        image_paths = [rendered_paths[index] for index in sorted(rendered_paths)]
+        scene_image_sequences = [
+            [frame_paths[frame_index] for frame_index in sorted(frame_paths)]
+            for _, frame_paths in sorted(rendered_paths.items())
+        ]
+        image_paths = [
+            image_path
+            for scene_sequence in scene_image_sequences
+            for image_path in scene_sequence
+        ]
         if rendered_prepared_prompts:
             manifest_scenes = manifest.get("scenes")
             if isinstance(manifest_scenes, list):
@@ -974,8 +1025,17 @@ class VideoGenerationPipeline:
                     if not isinstance(scene_dict, dict):
                         continue
                     idx = scene_dict.get("index")
-                    if isinstance(idx, int) and idx in rendered_prepared_prompts:
-                        scene_dict["prepared_prompt"] = rendered_prepared_prompts[idx]
+                    if not isinstance(idx, int):
+                        continue
+                    prompts_for_scene = rendered_prepared_prompts.get(idx)
+                    if not prompts_for_scene:
+                        continue
+                    ordered_prompts = [
+                        prompts_for_scene[frame_index]
+                        for frame_index in sorted(prompts_for_scene)
+                    ]
+                    scene_dict["prepared_prompts"] = ordered_prompts
+                    scene_dict["prepared_prompt"] = ordered_prompts[0]
         images = manifest.get("images")
         if isinstance(images, list):
             images.clear()
@@ -986,7 +1046,7 @@ class VideoGenerationPipeline:
         self._write_manifest(run_dir, manifest)
         self._status("🎬 Assembling video with ffmpeg")
         final_path = self._media.render_video(
-            images=image_paths,
+            images=scene_image_sequences,
             scenes=scenes,
             audio_path=audio_path,
             output_path=output_path,
@@ -1001,6 +1061,34 @@ class VideoGenerationPipeline:
         self._write_manifest(run_dir, manifest)
         self._status("✅ Video generation complete")
         return final_path
+
+    def _build_scene_frame_prompt(
+        self,
+        *,
+        scene_prompt: str,
+        scene_index: int,
+        total_scenes: int,
+        frame_index: int,
+        frames_per_scene: int,
+    ) -> str:
+        prepared = self._planner.prepare_image_prompt(
+            scene_prompt, scene_index=scene_index - 1, total_scenes=total_scenes
+        )
+        if frames_per_scene <= 1:
+            return prepared
+
+        variation_cues = (
+            "slight camera angle shift",
+            "small expression change",
+            "subtle gesture progression",
+            "gentle lighting variation",
+            "minor background parallax",
+        )
+        cue = variation_cues[frame_index % len(variation_cues)]
+        return (
+            f"{prepared}. Keep exact same scene continuity, character identity, wardrobe, "
+            f"location, and visual style. Frame {frame_index + 1}/{frames_per_scene} with {cue}."
+        )
 
     def _resolve_video_prompt_plan(
         self,
