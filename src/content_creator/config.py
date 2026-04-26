@@ -21,7 +21,10 @@ class ModelConfig:
     stt_model: str = "openai/whisper-large-v3"
     tts_model: str = "hexgrad/Kokoro-82M"
     safety_model: str = "cardiffnlp/twitter-roberta-base-offensive"
+    safety_secondary_model: str = "unitary/unbiased-toxic-roberta"
     diarization_model: str = "pyannote/speaker-diarization-3.1"
+    preclass_emotion_model: str = "j-hartmann/emotion-english-distilroberta-base"
+    preclass_intent_model: str = "MoritzLaurer/deberta-v3-large-zeroshot-v2.0"
     image_model: str = "black-forest-labs/FLUX.1-dev"
 
 
@@ -65,6 +68,7 @@ class AppConfig:
     # wavespeed. HF_PROVIDER_KEY must be the provider's own API key (not an HF token).
     image_provider: str = ""
     image_provider_key: str = ""
+    preclassification_ensemble_enabled: bool = True
 
     @classmethod
     def from_env(
@@ -115,6 +119,19 @@ class AppConfig:
                 if not max_inclusive and resolved >= maximum:
                     raise ValueError(f"{name} must be < {maximum}")
             return resolved
+
+        def _env_bool(name: str, default: bool) -> bool:
+            raw_value = os.getenv(name)
+            if raw_value is None:
+                return default
+            normalized = raw_value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+            raise ValueError(
+                f"{name} must be a boolean value (true/false, 1/0, yes/no, on/off)"
+            )
 
         def _profile_defaults(
             profile_name: str,
@@ -188,6 +205,17 @@ class AppConfig:
             safety_model=_resolve_model(
                 safety_model, "HF_CONTENT_SAFETY_MODEL", defaults.safety_model
             ),
+            safety_secondary_model=_resolve_model(
+                None,
+                "HF_CONTENT_SAFETY_SECONDARY_MODEL",
+                defaults.safety_secondary_model,
+            ),
+            preclass_emotion_model=_resolve_model(
+                None, "HF_PRECLASS_EMOTION_MODEL", defaults.preclass_emotion_model
+            ),
+            preclass_intent_model=_resolve_model(
+                None, "HF_PRECLASS_INTENT_MODEL", defaults.preclass_intent_model
+            ),
         )
         image_negative_prompt = (
             os.getenv("HF_IMAGE_NEGATIVE_PROMPT", "").strip()
@@ -252,6 +280,9 @@ class AppConfig:
         safety_inference = SafetyInferenceConfig(
             top_k=safety_defaults.top_k if safety_top_k is None else safety_top_k
         )
+        preclassification_ensemble_enabled = _env_bool(
+            "HF_PRECLASSIFICATION_ENSEMBLE_ENABLED", True
+        )
         return cls(
             hf_token=token,
             work_dir=base_dir,
@@ -264,4 +295,5 @@ class AppConfig:
             safety_inference=safety_inference,
             image_provider=image_provider,
             image_provider_key=image_provider_key,
+            preclassification_ensemble_enabled=preclassification_ensemble_enabled,
         )

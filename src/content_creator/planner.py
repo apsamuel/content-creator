@@ -22,6 +22,7 @@ class VideoPromptPreclassification:
     sentence_count: int
     truthfulness_assessment: "TranscriptAssessment"
     interaction_style_assessment: "InteractionStyleAssessment"
+    ensemble_scorecard: "PreclassificationEnsembleScorecard | None" = None
 
 
 @dataclass(slots=True)
@@ -37,6 +38,26 @@ class SpeakerSentimentAssessment:
     sentiment: str
     confidence_score: float
     reason: str
+
+
+@dataclass(slots=True)
+class EnsembleSignal:
+    source: str
+    model: str
+    label: str
+    confidence_score: float
+    normalized_risk: float
+    weight: float
+    reason: str
+
+
+@dataclass(slots=True)
+class PreclassificationEnsembleScorecard:
+    weighted_risk_score: float
+    risk_level: str
+    recommended_visual_intensity: str
+    signals: list[EnsembleSignal]
+    warnings: list[str]
 
 
 @dataclass(slots=True)
@@ -101,11 +122,41 @@ class ScenePlanner:
             "wide establishing shot",
         ),
     }
+    _DEFAULT_INTENT_LABELS = (
+        "informational",
+        "persuasive",
+        "call_to_action",
+        "instructional",
+        "narrative",
+    )
 
-    def __init__(self, llm: Any, *, image_composition_mode: str = "balanced"):
+    def __init__(
+        self,
+        llm: Any,
+        *,
+        image_composition_mode: str = "balanced",
+        preclassification_ensemble_enabled: bool = True,
+        preclass_emotion_model: str | None = None,
+        preclass_intent_model: str | None = None,
+        safety_primary_model: str | None = None,
+        safety_secondary_model: str | None = None,
+    ):
         self._llm = llm
         self._image_composition_mode = self._normalize_composition_mode(
             image_composition_mode
+        )
+        self._preclassification_ensemble_enabled = preclassification_ensemble_enabled
+        self._preclass_emotion_model = (
+            preclass_emotion_model or "j-hartmann/emotion-english-distilroberta-base"
+        )
+        self._preclass_intent_model = (
+            preclass_intent_model or "MoritzLaurer/deberta-v3-large-zeroshot-v2.0"
+        )
+        self._safety_primary_model = (
+            safety_primary_model or "cardiffnlp/twitter-roberta-base-offensive"
+        )
+        self._safety_secondary_model = (
+            safety_secondary_model or "unitary/unbiased-toxic-roberta"
         )
 
     def generate_video_prompt(self, *, narration_text: str) -> str:
@@ -139,6 +190,13 @@ class ScenePlanner:
             sentence_count=self._count_sentences(narration_text),
             truthfulness_assessment=truthfulness_assessment,
             interaction_style_assessment=interaction_style_assessment,
+            ensemble_scorecard=self._build_ensemble_scorecard(
+                narration_text=narration_text,
+                mood=mood,
+                has_foul_language=has_foul_language,
+                truthfulness_assessment=truthfulness_assessment,
+                interaction_style_assessment=interaction_style_assessment,
+            ),
         )
         return VideoPromptPlan(
             video_prompt=prompt_text,
@@ -513,6 +571,293 @@ Transcript:
                 reason="Sentiment is estimated from the transcript only and no speaker-specific structure was available.",
             )
         ]
+
+    def _build_ensemble_scorecard(
+        self,
+        *,
+        narration_text: str,
+        mood: str,
+        has_foul_language: bool,
+        truthfulness_assessment: TranscriptAssessment,
+        interaction_style_assessment: InteractionStyleAssessment,
+    ) -> PreclassificationEnsembleScorecard:
+        if not self._preclassification_ensemble_enabled:
+            return PreclassificationEnsembleScorecard(
+                weighted_risk_score=0.0,
+                risk_level="Low",
+                recommended_visual_intensity="normal",
+                signals=[],
+                warnings=["Pre-classification ensemble is disabled."],
+            )
+
+        signals: list[EnsembleSignal] = []
+        warnings: list[str] = []
+
+        signals.append(self._truthfulness_signal(truthfulness_assessment))
+        signals.append(
+            EnsembleSignal(
+                source="llm_base",
+                model="transcript_rules",
+                label="foul_language" if has_foul_language else "clean_language",
+                confidence_score=1.0,
+                normalized_risk=1.0 if has_foul_language else 0.0,
+                weight=0.08,
+                reason=(
+                    "Transcript-level foul language flag from structured prompt output."
+                ),
+            )
+        )
+        signals.append(
+            self._persuasion_signal(
+                interaction_style_assessment.persuasion_intent,
+                interaction_style_assessment.claim_density,
+            )
+        )
+
+        safety_signal_primary = self._try_content_safety_signal(
+            narration_text=narration_text,
+            model_id=self._safety_primary_model,
+            source="model_safety_primary",
+            weight=0.24,
+        )
+        if safety_signal_primary is not None:
+            signals.append(safety_signal_primary)
+        else:
+            warnings.append("Primary safety model signal unavailable.")
+
+        safety_signal_secondary = self._try_content_safety_signal(
+            narration_text=narration_text,
+            model_id=self._safety_secondary_model,
+            source="model_safety_secondary",
+            weight=0.16,
+        )
+        if safety_signal_secondary is not None:
+            signals.append(safety_signal_secondary)
+        else:
+            warnings.append("Secondary safety model signal unavailable.")
+
+        emotion_signal = self._try_emotion_signal(
+            narration_text=narration_text,
+            model_id=self._preclass_emotion_model,
+            mood=mood,
+        )
+        if emotion_signal is not None:
+            signals.append(emotion_signal)
+        else:
+            warnings.append("Emotion model signal unavailable.")
+
+        intent_signal = self._try_intent_signal(
+            narration_text=narration_text, model_id=self._preclass_intent_model
+        )
+        if intent_signal is not None:
+            signals.append(intent_signal)
+        else:
+            warnings.append("Intent model signal unavailable.")
+
+        weighted_risk_score = self._weighted_average_risk(signals)
+        return PreclassificationEnsembleScorecard(
+            weighted_risk_score=weighted_risk_score,
+            risk_level=self._risk_level(weighted_risk_score),
+            recommended_visual_intensity=self._recommended_visual_intensity(
+                weighted_risk_score=weighted_risk_score, mood=mood
+            ),
+            signals=signals,
+            warnings=warnings,
+        )
+
+    def _truthfulness_signal(self, assessment: TranscriptAssessment) -> EnsembleSignal:
+        risk_by_label = {
+            "LikelyTruthful": 0.15,
+            "MixedOrUnverifiable": 0.55,
+            "LikelyMisleading": 0.9,
+        }
+        base_risk = risk_by_label.get(assessment.label, 0.55)
+        confidence = max(0.0, min(1.0, assessment.confidence_score))
+        confidence_adjustment = 0.2 * confidence
+        normalized_risk = max(0.0, min(1.0, base_risk + confidence_adjustment - 0.1))
+        return EnsembleSignal(
+            source="llm_base",
+            model="transcript_truthfulness_prompt",
+            label=assessment.label,
+            confidence_score=confidence,
+            normalized_risk=normalized_risk,
+            weight=0.24,
+            reason=assessment.reason,
+        )
+
+    def _persuasion_signal(
+        self,
+        persuasion_assessment: TranscriptAssessment,
+        claim_density_assessment: TranscriptAssessment,
+    ) -> EnsembleSignal:
+        persuasion_by_label = {"Strong": 0.9, "Moderate": 0.55, "LowOrNone": 0.2}
+        claim_density_by_label = {"High": 0.85, "Medium": 0.55, "Low": 0.25}
+        persuasion_risk = persuasion_by_label.get(persuasion_assessment.label, 0.5)
+        claim_risk = claim_density_by_label.get(claim_density_assessment.label, 0.5)
+        confidence = max(
+            0.0,
+            min(
+                1.0,
+                (
+                    persuasion_assessment.confidence_score
+                    + claim_density_assessment.confidence_score
+                )
+                / 2.0,
+            ),
+        )
+        normalized_risk = max(
+            0.0, min(1.0, (persuasion_risk * 0.65) + (claim_risk * 0.35))
+        )
+        return EnsembleSignal(
+            source="llm_base",
+            model="interaction_style_prompt",
+            label=f"{persuasion_assessment.label}+{claim_density_assessment.label}",
+            confidence_score=confidence,
+            normalized_risk=normalized_risk,
+            weight=0.12,
+            reason=(
+                "Derived from persuasion intent and claim density assessments in transcript analysis."
+            ),
+        )
+
+    def _try_content_safety_signal(
+        self, *, narration_text: str, model_id: str, source: str, weight: float
+    ) -> EnsembleSignal | None:
+        classify = getattr(self._llm, "classify_content_safety", None)
+        if not callable(classify):
+            return None
+        try:
+            payload = classify(narration_text, model=model_id)
+        except Exception:
+            return None
+        unsafe_score = self._parse_confidence_score(
+            payload.get("unsafe_score") if isinstance(payload, dict) else 0.0
+        )
+        top_label = ""
+        if isinstance(payload, dict):
+            top_label = self._normalize_fragment(str(payload.get("top_label", "")))
+        return EnsembleSignal(
+            source=source,
+            model=model_id,
+            label=top_label or "unknown",
+            confidence_score=unsafe_score,
+            normalized_risk=unsafe_score,
+            weight=weight,
+            reason="Unsafe probability from content safety classifier.",
+        )
+
+    def _try_emotion_signal(
+        self, *, narration_text: str, model_id: str, mood: str
+    ) -> EnsembleSignal | None:
+        classify = getattr(self._llm, "classify_text_emotion", None)
+        if not callable(classify):
+            return None
+        try:
+            payload = classify(narration_text, model=model_id)
+        except Exception:
+            return None
+
+        top_label = ""
+        top_score = 0.0
+        if isinstance(payload, dict):
+            top_label = self._normalize_fragment(str(payload.get("top_label", "")))
+            top_score = self._parse_confidence_score(payload.get("top_score"))
+
+        risk_by_emotion = {
+            "anger": 0.82,
+            "disgust": 0.78,
+            "fear": 0.72,
+            "sadness": 0.48,
+            "surprise": 0.4,
+            "neutral": 0.2,
+            "joy": 0.12,
+            "love": 0.1,
+        }
+        emotion_key = top_label.lower()
+        base_risk = risk_by_emotion.get(emotion_key, 0.3)
+        normalized_risk = max(0.0, min(1.0, base_risk * max(0.45, top_score)))
+        reason = f"Emotion classifier top label={top_label or 'unknown'} aligned with mood={mood}."
+        return EnsembleSignal(
+            source="model_emotion",
+            model=model_id,
+            label=top_label or "unknown",
+            confidence_score=top_score,
+            normalized_risk=normalized_risk,
+            weight=0.08,
+            reason=reason,
+        )
+
+    def _try_intent_signal(
+        self, *, narration_text: str, model_id: str
+    ) -> EnsembleSignal | None:
+        classify = getattr(self._llm, "classify_zero_shot_intent", None)
+        if not callable(classify):
+            return None
+        try:
+            payload = classify(
+                narration_text,
+                candidate_labels=list(self._DEFAULT_INTENT_LABELS),
+                model=model_id,
+            )
+        except Exception:
+            return None
+
+        top_label = ""
+        top_score = 0.0
+        if isinstance(payload, dict):
+            top_label = self._normalize_fragment(str(payload.get("top_label", "")))
+            top_score = self._parse_confidence_score(payload.get("top_score"))
+
+        risk_by_intent = {
+            "persuasive": 0.8,
+            "call_to_action": 0.72,
+            "instructional": 0.5,
+            "narrative": 0.28,
+            "informational": 0.22,
+        }
+        intent_key = top_label.lower().replace(" ", "_")
+        base_risk = risk_by_intent.get(intent_key, 0.35)
+        normalized_risk = max(0.0, min(1.0, base_risk * max(0.45, top_score)))
+        return EnsembleSignal(
+            source="model_intent",
+            model=model_id,
+            label=top_label or "unknown",
+            confidence_score=top_score,
+            normalized_risk=normalized_risk,
+            weight=0.08,
+            reason="Zero-shot intent classification over transcript narrative intent labels.",
+        )
+
+    def _weighted_average_risk(self, signals: list[EnsembleSignal]) -> float:
+        if not signals:
+            return 0.0
+        total_weight = 0.0
+        weighted_sum = 0.0
+        for signal in signals:
+            total_weight += signal.weight
+            weighted_sum += signal.normalized_risk * signal.weight
+        if total_weight <= 0.0:
+            return 0.0
+        return max(0.0, min(1.0, round(weighted_sum / total_weight, 4)))
+
+    def _risk_level(self, weighted_risk_score: float) -> str:
+        if weighted_risk_score >= 0.68:
+            return "High"
+        if weighted_risk_score >= 0.36:
+            return "Medium"
+        return "Low"
+
+    def _recommended_visual_intensity(
+        self, *, weighted_risk_score: float, mood: str
+    ) -> str:
+        mood_lower = mood.lower()
+        if weighted_risk_score >= 0.68:
+            return "restrained"
+        if weighted_risk_score >= 0.36:
+            if mood_lower in {"tense", "angry", "evil", "mysterious"}:
+                return "balanced"
+            return "expressive"
+        return "vivid"
 
     def _count_words(self, text: str) -> int:
         return len(re.findall(r"\b\w+\b", text))

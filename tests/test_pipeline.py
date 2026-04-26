@@ -92,7 +92,15 @@ class FakeGateway:
 
 class FakePlanner:
     def __init__(
-        self, _gateway: FakeGateway, *, image_composition_mode: str = "balanced"
+        self,
+        _gateway: FakeGateway,
+        *,
+        image_composition_mode: str = "balanced",
+        preclassification_ensemble_enabled: bool = True,
+        preclass_emotion_model: str | None = None,
+        preclass_intent_model: str | None = None,
+        safety_primary_model: str | None = None,
+        safety_secondary_model: str | None = None,
     ):
         self.calls: list[tuple[str, str, float]] = []
         self.generated_video_prompt_plan_inputs: list[str] = []

@@ -55,7 +55,13 @@ class VideoGenerationPipeline:
         self._status_callback = status_callback
         self._gateway = HuggingFaceGateway(config)
         self._planner = ScenePlanner(
-            self._gateway, image_composition_mode=config.image_composition_mode
+            self._gateway,
+            image_composition_mode=config.image_composition_mode,
+            preclassification_ensemble_enabled=config.preclassification_ensemble_enabled,
+            preclass_emotion_model=config.models.preclass_emotion_model,
+            preclass_intent_model=config.models.preclass_intent_model,
+            safety_primary_model=config.models.safety_model,
+            safety_secondary_model=config.models.safety_secondary_model,
         )
         self._media = MediaAssembler(
             width=config.width, height=config.height, fps=config.fps
@@ -877,6 +883,31 @@ class VideoGenerationPipeline:
                         for item in video_prompt_plan.preclassification.interaction_style_assessment.speaker_sentiment
                     ],
                 },
+                **(
+                    {
+                        "ensemble_scorecard": {
+                            "weighted_risk_score": video_prompt_plan.preclassification.ensemble_scorecard.weighted_risk_score,
+                            "risk_level": video_prompt_plan.preclassification.ensemble_scorecard.risk_level,
+                            "recommended_visual_intensity": video_prompt_plan.preclassification.ensemble_scorecard.recommended_visual_intensity,
+                            "signals": [
+                                {
+                                    "source": signal.source,
+                                    "model": signal.model,
+                                    "label": signal.label,
+                                    "confidence_score": signal.confidence_score,
+                                    "normalized_risk": signal.normalized_risk,
+                                    "weight": signal.weight,
+                                    "reason": signal.reason,
+                                }
+                                for signal in video_prompt_plan.preclassification.ensemble_scorecard.signals
+                            ],
+                            "warnings": video_prompt_plan.preclassification.ensemble_scorecard.warnings,
+                        }
+                    }
+                    if video_prompt_plan.preclassification.ensemble_scorecard
+                    is not None
+                    else {}
+                ),
             }
             if video_prompt_plan.preclassification is not None
             else None

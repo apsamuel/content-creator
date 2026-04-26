@@ -20,6 +20,39 @@ class StubLLM:
         return self.responses[0]
 
 
+class EnsembleStubLLM(StubLLM):
+    def classify_content_safety(
+        self, _text: str, *, model: str | None = None
+    ) -> dict[str, object]:
+        return {
+            "model": model or "cardiffnlp/twitter-roberta-base-offensive",
+            "unsafe_score": 0.34,
+            "top_label": "offensive",
+            "top_score": 0.34,
+            "labels": [{"label": "offensive", "score": 0.34}],
+        }
+
+    def classify_text_emotion(
+        self, _text: str, *, model: str | None = None
+    ) -> dict[str, object]:
+        return {
+            "model": model or "j-hartmann/emotion-english-distilroberta-base",
+            "top_label": "joy",
+            "top_score": 0.78,
+            "labels": [{"label": "joy", "score": 0.78}],
+        }
+
+    def classify_zero_shot_intent(
+        self, _text: str, *, candidate_labels: list[str], model: str | None = None
+    ) -> dict[str, object]:
+        return {
+            "model": model or "MoritzLaurer/deberta-v3-large-zeroshot-v2.0",
+            "top_label": candidate_labels[0],
+            "top_score": 0.81,
+            "labels": [{"label": candidate_labels[0], "score": 0.81}],
+        }
+
+
 def test_build_scenes_uses_llm_json_payload() -> None:
     llm = StubLLM(
         json.dumps(
@@ -543,3 +576,73 @@ def test_extract_json_ignores_invalid_json() -> None:
 
     assert planner._extract_json("not-json") == {}
     assert planner._extract_json("{bad json}") == {}
+
+
+def test_generate_video_prompt_adds_ensemble_scorecard() -> None:
+    llm = EnsembleStubLLM(
+        [
+            json.dumps(
+                {
+                    "mood": "Hopeful",
+                    "has_foul_language": "No",
+                    "video_prompt": "stylized illustrated hero under sunrise skies",
+                }
+            ),
+            json.dumps(
+                {
+                    "truthfulness": {
+                        "label": "MixedOrUnverifiable",
+                        "confidence_score": 0.71,
+                        "reason": "Some claims are descriptive but not verifiable from transcript alone.",
+                    },
+                    "formality": {
+                        "label": "Mixed",
+                        "confidence_score": 0.65,
+                        "reason": "Tone is semi-formal and conversational.",
+                    },
+                    "certainty_hedging": {
+                        "label": "Balanced",
+                        "confidence_score": 0.67,
+                        "reason": "Language uses moderate certainty.",
+                    },
+                    "persuasion_intent": {
+                        "label": "Moderate",
+                        "confidence_score": 0.6,
+                        "reason": "Contains some persuasive framing.",
+                    },
+                    "claim_density": {
+                        "label": "Medium",
+                        "confidence_score": 0.55,
+                        "reason": "Includes a moderate number of claims.",
+                    },
+                    "speaker_sentiment": [
+                        {
+                            "speaker": "Unknown",
+                            "sentiment": "Neutral",
+                            "confidence_score": 0.58,
+                            "reason": "Emotion appears generally even.",
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    planner = ScenePlanner(llm)
+
+    plan = planner.generate_video_prompt_plan(
+        narration_text="We can improve outcomes if we work together and stay focused."
+    )
+
+    assert plan.preclassification is not None
+    assert plan.preclassification.ensemble_scorecard is not None
+    scorecard = plan.preclassification.ensemble_scorecard
+    assert scorecard.weighted_risk_score >= 0.0
+    assert scorecard.weighted_risk_score <= 1.0
+    assert scorecard.risk_level in {"Low", "Medium", "High"}
+    assert scorecard.recommended_visual_intensity in {
+        "restrained",
+        "balanced",
+        "expressive",
+        "vivid",
+    }
+    assert len(scorecard.signals) >= 5
