@@ -93,6 +93,8 @@ def test_render_video_builds_concat_and_invokes_ffmpeg(
     assert final_mux_call[final_mux_call.index("-ac") + 1] == "2"
     assert "-b:a" in final_mux_call
     assert final_mux_call[final_mux_call.index("-b:a") + 1] == "192k"
+    assert "-profile:a" in final_mux_call
+    assert final_mux_call[final_mux_call.index("-profile:a") + 1] == "aac_low"
     assert "+faststart" in final_mux_call
 
 
@@ -177,3 +179,9 @@ def test_overlay_sound_effects_builds_filter_graph(
     filter_graph = command[command.index("-filter_complex") + 1]
     assert "between(t,0.400,0.800)" in filter_graph
     assert "adelay=400|400" in filter_graph
+    assert "-profile:a" in command
+    assert command[command.index("-profile:a") + 1] == "aac_low"
+    assert "-ar" in command
+    assert command[command.index("-ar") + 1] == "48000"
+    assert "-ac" in command
+    assert command[command.index("-ac") + 1] == "2"
