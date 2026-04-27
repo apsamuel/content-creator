@@ -107,12 +107,13 @@ class ScenePlan:
 
 class ScenePlanner:
     _GLOBAL_VIDEO_STYLE = (
-        "80s/90s retro anime aesthetic, vibrant colors, cel shading, detailed "
-        "illustration, sharp linework, dramatic composition, expressive characters, "
-        "subtle camera-shake energy, Studio Ghibli and Makoto Shinkai-inspired artistry"
         "characters are primarily african american, latino or european, with a gritty, dynamic, and cinematic visual style that emphasizes strong silhouettes"
         "the characters in this story are communicating by phone, cell phones, pay phones, and face-to-face, and the visuals should reflect the energy and emotional tone of their interactions"
         "gritty, american urban cityscapes and characters with a dark edge, dynamic action poses, and a moody atmosphere"
+        "80s/90s retro anime aesthetic, vibrant colors, cel shading, detailed "
+        "illustration, sharp linework, dramatic composition, expressive characters, "
+        "subtle camera-shake energy, Studio Ghibli inspired artistry"
+        "the main character portrayed in each scene sequence should reflect the mood and emotion of the narration provided a long with the scene"
     )
     _COMPOSITION_GUIDANCE = (
         "favor still-image-friendly composition cues such as low-angle hero framing, "
@@ -312,6 +313,7 @@ class ScenePlanner:
         video_prompt: str,
         total_duration_seconds: float,
         max_scenes: int = 8,
+        cinematic_transitions: bool = False,
     ) -> ScenePlan:
         scene_count = max(3, min(max_scenes, math.ceil(total_duration_seconds / 4.5)))
         scene_prompt = self._build_prompt(
@@ -359,10 +361,10 @@ class ScenePlanner:
             )
             previous_scene_summary = summary or prompt_text
 
-        # Apply cinematic transitions between scenes
-        scenes = self._apply_cinematic_transitions(
-            scenes=scenes, narration_text=narration_text
-        )
+        if cinematic_transitions:
+            scenes = self._apply_cinematic_transitions(
+                scenes=scenes, narration_text=narration_text
+            )
 
         return ScenePlan(scenes=scenes, scene_prompt=scene_prompt)
 

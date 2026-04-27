@@ -276,6 +276,25 @@ def cli(
     type=click.Path(dir_okay=False, path_type=Path),
 )
 @click.option(
+    "--cinematic-intro/--no-cinematic-intro",
+    default=False,
+    show_default=True,
+    help=(
+        "Generate an LLM-crafted cinematic title card and short description at the "
+        "beginning of the rendered video."
+    ),
+)
+@click.option(
+    "--cinematic-intro-duration",
+    default=5.8,
+    show_default=True,
+    type=click.FloatRange(2.0, 20.0),
+    help=(
+        "Duration in seconds for the cinematic intro title card when "
+        "--cinematic-intro is enabled."
+    ),
+)
+@click.option(
     "--image-workers",
     default=None,
     show_default=False,
@@ -303,6 +322,8 @@ def from_text(
     video_prompt: str | None,
     generate_video_prompt: bool,
     output_path: Path,
+    cinematic_intro: bool,
+    cinematic_intro_duration: float,
     image_workers: int | None,
     images_per_scene: int | None,
     work_dir: str | None,
@@ -343,6 +364,8 @@ def from_text(
             video_prompt=resolved_video_prompt,
             generate_video_prompt=generate_video_prompt,
             output_path=output_path,
+            cinematic_intro=cinematic_intro,
+            cinematic_intro_duration=cinematic_intro_duration,
             image_workers=resolved_image_workers,
             images_per_scene=resolved_images_per_scene,
             view_preclassification=view_preclassification,
@@ -374,6 +397,25 @@ def from_text(
     "output_path",
     required=True,
     type=click.Path(dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--cinematic-intro/--no-cinematic-intro",
+    default=False,
+    show_default=True,
+    help=(
+        "Generate an LLM-crafted cinematic title card and short description at the "
+        "beginning of the rendered video."
+    ),
+)
+@click.option(
+    "--cinematic-intro-duration",
+    default=5.8,
+    show_default=True,
+    type=click.FloatRange(2.0, 20.0),
+    help=(
+        "Duration in seconds for the cinematic intro title card when "
+        "--cinematic-intro is enabled."
+    ),
 )
 @click.option(
     "--image-workers",
@@ -516,6 +558,8 @@ def from_audio(
     video_prompt: str | None,
     generate_video_prompt: bool,
     output_path: Path,
+    cinematic_intro: bool,
+    cinematic_intro_duration: float,
     image_workers: int | None,
     images_per_scene: int | None,
     chunk_seconds: float,
@@ -584,6 +628,8 @@ def from_audio(
             video_prompt=resolved_video_prompt,
             generate_video_prompt=generate_video_prompt,
             output_path=output_path,
+            cinematic_intro=cinematic_intro,
+            cinematic_intro_duration=cinematic_intro_duration,
             image_workers=resolved_image_workers,
             images_per_scene=resolved_images_per_scene,
             chunk_seconds=chunk_seconds,

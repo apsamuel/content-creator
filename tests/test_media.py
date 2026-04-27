@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from content_creator.media import MediaAssembler
+from content_creator.media import CinematicIntroCard, MediaAssembler
 from content_creator.media import AudioOverlayEvent
 from content_creator.planner import Scene
 
@@ -145,6 +145,65 @@ def test_render_video_supports_multiple_images_per_scene(
     ffmpeg_calls = [command for command in calls if command[0] == "ffmpeg"]
     # 4 segment renders + 2 per-scene sequence concats + 1 scene-stitch concat + 1 final mux
     assert len(ffmpeg_calls) == 8
+
+
+def test_render_video_with_cinematic_intro_prepends_title_card(
+    monkeypatch, tmp_path: Path
+) -> None:
+    assembler = MediaAssembler(width=1280, height=720, fps=24)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    image1 = tmp_path / "img1.png"
+    image2 = tmp_path / "img2.png"
+    image1.write_bytes(b"x")
+    image2.write_bytes(b"y")
+
+    scenes = [
+        Scene(index=1, prompt="A", duration_seconds=1.0),
+        Scene(index=2, prompt="B", duration_seconds=1.5),
+    ]
+    audio_path = tmp_path / "audio.wav"
+    audio_path.write_bytes(b"audio")
+    output_path = tmp_path / "final-cinematic.mp4"
+
+    calls: list[list[str]] = []
+
+    def _run(command, check, capture_output, text):
+        calls.append(command)
+        if command[0] == "ffmpeg":
+            Path(command[-1]).write_bytes(b"out")
+        return Completed(stdout="")
+
+    monkeypatch.setattr(subprocess, "run", _run)
+
+    result = assembler.render_video(
+        images=[image1, image2],
+        scenes=scenes,
+        audio_path=audio_path,
+        output_path=output_path,
+        work_dir=work_dir,
+        cinematic_intro=CinematicIntroCard(
+            title="Quarterly Chaos, Now in Widescreen",
+            description="A very official update that accidentally became a comedy special.",
+            duration_seconds=5.8,
+        ),
+    )
+
+    assert result == output_path
+    assert output_path.exists()
+    ffmpeg_calls = [command for command in calls if command[0] == "ffmpeg"]
+    assert len(ffmpeg_calls) == 6
+    assert any(
+        "concat_intro.txt" in " ".join(command)
+        for command in ffmpeg_calls
+        if "-f" in command and "concat" in command
+    )
+    final_mux_call = ffmpeg_calls[-1]
+    assert "-af" in final_mux_call
+    filter_value = final_mux_call[final_mux_call.index("-af") + 1]
+    assert "adelay=5800:all=1" in filter_value
+    assert "loudnorm=I=-16:TP=-1.5:LRA=11" in filter_value
 
 
 def test_chunk_audio_invokes_ffmpeg_and_returns_segments(

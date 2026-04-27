@@ -90,6 +90,16 @@ class FakeGateway:
         self.generated_images.append((prompt, destination))
         return destination
 
+    def generate_text(self, prompt: str) -> str:
+        if '"title"' in prompt and '"description"' in prompt:
+            return json.dumps(
+                {
+                    "title": "Quarterly Chaos, Now in Widescreen",
+                    "description": "A very official update that accidentally became a comedy special.",
+                }
+            )
+        return "{}"
+
 
 class FakePlanner:
     def __init__(
@@ -237,6 +247,7 @@ class FakeMedia:
         self.width = width
         self.height = height
         self.fps = fps
+        self.last_cinematic_intro = None
 
     def get_audio_duration(self, audio_path: Path) -> float:
         return 5.0
@@ -252,8 +263,16 @@ class FakeMedia:
         return [chunk1, chunk2]
 
     def render_video(
-        self, *, images, scenes, audio_path: Path, output_path: Path, work_dir: Path
+        self,
+        *,
+        images,
+        scenes,
+        audio_path: Path,
+        output_path: Path,
+        work_dir: Path,
+        cinematic_intro=None,
     ) -> Path:
+        self.last_cinematic_intro = cinematic_intro
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"video")
         return output_path
@@ -590,6 +609,67 @@ def test_generate_from_text_can_generate_video_prompt(
             "concise_summary": "A collaborative planning conversation with low conflict and an emerging, but not finalized, decision.",
         },
     }
+
+
+def test_generate_from_text_includes_cinematic_intro_when_enabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    pipeline = VideoGenerationPipeline(_config(tmp_path))
+    output_path = tmp_path / "out" / "cinematic-intro.mp4"
+
+    pipeline.generate_from_text(
+        narration_text="Narration text",
+        video_prompt="Video direction",
+        output_path=output_path,
+        cinematic_intro=True,
+    )
+
+    manifest_path = _config(tmp_path).work_dir / output_path.stem / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["cinematic_intro"]["enabled"] is True
+    assert manifest["cinematic_intro"]["title"] == "Quarterly Chaos, Now in Widescreen"
+    assert "comedy special" in manifest["cinematic_intro"]["description"]
+
+    intro_card = pipeline._media.last_cinematic_intro
+    assert intro_card is not None
+    assert intro_card.title == "Quarterly Chaos, Now in Widescreen"
+
+
+def test_generate_from_text_uses_custom_cinematic_intro_duration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    pipeline = VideoGenerationPipeline(_config(tmp_path))
+    output_path = tmp_path / "out" / "cinematic-intro-custom-duration.mp4"
+
+    pipeline.generate_from_text(
+        narration_text="Narration text",
+        video_prompt="Video direction",
+        output_path=output_path,
+        cinematic_intro=True,
+        cinematic_intro_duration=7.25,
+    )
+
+    manifest_path = _config(tmp_path).work_dir / output_path.stem / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["cinematic_intro"]["duration_seconds"] == pytest.approx(7.25)
+
+    intro_card = pipeline._media.last_cinematic_intro
+    assert intro_card is not None
+    assert intro_card.duration_seconds == pytest.approx(7.25)
 
 
 def test_transcribe_audio_file_falls_back_without_ffmpeg(

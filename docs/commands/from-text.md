@@ -28,6 +28,8 @@ Use `from-text` when you have script text and want the tool to generate both aud
   - `--video-prompt TEXT`, or
   - `--generate-video-prompt`
 - Optional:
+  - `--cinematic-intro / --no-cinematic-intro` (default `--no-cinematic-intro`)
+  - `--cinematic-intro-duration FLOAT` (default `5.8`, range `2.0` to `20.0`)
   - `--image-workers INTEGER` (default `HF_IMAGE_WORKERS` or `1`)
   - `--images-per-scene INTEGER` (default `HF_IMAGES_PER_SCENE` or `1`)
   - `--work-dir TEXT`
@@ -48,6 +50,8 @@ The CLI loads and validates the file contents before running the pipeline.
 
 - `--image-workers` controls parallel scene image generation. If omitted, the command falls back to `HF_IMAGE_WORKERS`, then `1`.
 - `--images-per-scene` controls how many coherent image variants are generated for each scene to improve visual fluidity. If omitted, the command falls back to `HF_IMAGES_PER_SCENE`, then `1`.
+- `--cinematic-intro` generates a cinematic opening title card with an LLM-written witty title and short description, then starts the main narration after the intro card fades out.
+- `--cinematic-intro-duration` controls how long the intro card stays on screen when `--cinematic-intro` is enabled.
 - `--view-preclassification` prints the planner's video-prompt preclassification block after LLM analysis so you can inspect mood, tone, and safety-related metadata before reviewing `manifest.json`.
 
 ## Mechanism Flow
@@ -95,6 +99,8 @@ Use two image workers and print preclassification details:
 content-creator from-text \
   --text-transcription file://prompts/narration.txt \
   --generate-video-prompt \
+  --cinematic-intro \
+  --cinematic-intro-duration 7.2 \
   --images-per-scene 3 \
   --image-workers 2 \
   --view-preclassification \

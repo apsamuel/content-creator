@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -17,6 +18,13 @@ class AudioOverlayEvent:
     sfx_path: Path
     sfx_duration_seconds: float
     sfx_gain_db: float = 0.0
+
+
+@dataclass(slots=True)
+class CinematicIntroCard:
+    title: str
+    description: str
+    duration_seconds: float
 
 
 class MediaAssembler:
@@ -83,6 +91,7 @@ class MediaAssembler:
         audio_path: Path,
         output_path: Path,
         work_dir: Path,
+        cinematic_intro: CinematicIntroCard | None = None,
     ) -> Path:
         clips_dir = work_dir / "clips"
         clips_dir.mkdir(parents=True, exist_ok=True)
@@ -147,18 +156,60 @@ class MediaAssembler:
             text=True,
         )
 
+        final_visual_path = stitched
+        intro_delay_seconds = 0.0
+        if cinematic_intro is not None:
+            intro_clip = work_dir / "intro_card.mp4"
+            self._render_intro_card(intro_card=cinematic_intro, output_path=intro_clip)
+
+            intro_concat_list = work_dir / "concat_intro.txt"
+            intro_concat_list.write_text(
+                "\n".join(
+                    [f"file '{intro_clip.as_posix()}'", f"file '{stitched.as_posix()}'"]
+                ),
+                encoding="utf-8",
+            )
+            stitched_with_intro = work_dir / "stitched_with_intro.mp4"
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    str(intro_concat_list),
+                    "-c",
+                    "copy",
+                    str(stitched_with_intro),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            final_visual_path = stitched_with_intro
+            intro_delay_seconds = max(0.0, float(cinematic_intro.duration_seconds))
+
+        audio_filter = (
+            "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,pan=stereo|c0=c0|c1=c0"
+        )
+        if intro_delay_seconds > 0:
+            delay_ms = int(round(intro_delay_seconds * 1000))
+            audio_filter = f"adelay={delay_ms}:all=1,{audio_filter}"
+
         subprocess.run(
             [
                 "ffmpeg",
                 "-y",
                 "-i",
-                str(stitched),
+                str(final_visual_path),
                 "-i",
                 str(audio_path),
                 "-c:v",
                 "copy",
                 "-af",
-                "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,pan=stereo|c0=c0|c1=c0",
+                audio_filter,
                 "-c:a",
                 "aac",
                 "-profile:a",
@@ -244,6 +295,126 @@ class MediaAssembler:
         )
         subprocess.run(command, check=True, capture_output=True, text=True)
         return output_path
+
+    def _render_intro_card(
+        self, *, intro_card: CinematicIntroCard, output_path: Path
+    ) -> None:
+        duration = max(2.5, float(intro_card.duration_seconds))
+        fade_window = min(1.2, duration * 0.22)
+        title_hold_end = max(fade_window, duration - fade_window)
+
+        description_text = self._wrap_intro_description(intro_card.description)
+        title_text = self._escape_drawtext(intro_card.title)
+        description_escaped = self._escape_drawtext(description_text)
+
+        title_alpha = (
+            f"if(lt(t,{fade_window:.2f}),t/{fade_window:.2f},"
+            f"if(lt(t,{title_hold_end:.2f}),1,"
+            f"if(lt(t,{duration:.2f}),({duration:.2f}-t)/{fade_window:.2f},0)))"
+        )
+
+        description_fade_in_start = min(duration * 0.24, duration - (fade_window * 2))
+        description_fade_in_end = min(
+            description_fade_in_start + 0.8, duration - (fade_window * 1.3)
+        )
+        description_fade_out_start = max(
+            description_fade_in_end + 0.6, duration - (fade_window * 1.7)
+        )
+        description_alpha = (
+            f"if(lt(t,{description_fade_in_start:.2f}),0,"
+            f"if(lt(t,{description_fade_in_end:.2f}),"
+            f"(t-{description_fade_in_start:.2f})/{max(0.2, description_fade_in_end - description_fade_in_start):.2f},"
+            f"if(lt(t,{description_fade_out_start:.2f}),1,"
+            f"if(lt(t,{duration:.2f}),({duration:.2f}-t)/{max(0.2, duration - description_fade_out_start):.2f},0))))"
+        )
+
+        font_arg = self._resolve_intro_font_arg()
+        filter_parts = [
+            f"color=c=#090b12:s={self._width}x{self._height}:d={duration:.3f}",
+            "format=rgba",
+            (
+                "drawbox=x=0:y=0:w=iw:h=ih:color=#0f1628@0.35:t=fill,"
+                "drawbox=x=0:y=ih*0.12:w=iw:h=ih*0.76:color=#000000@0.42:t=fill"
+            ),
+            (
+                "drawtext="
+                f"{font_arg}:"
+                f"text='{title_text}':"
+                "fontcolor=white:"
+                "fontsize=min(h*0.09\\,94):"
+                "x=(w-text_w)/2:"
+                "y=h*0.28:"
+                "line_spacing=10:"
+                "shadowcolor=#000000@0.85:"
+                "shadowx=2:shadowy=2:"
+                f"alpha='{title_alpha}'"
+            ),
+            (
+                "drawtext="
+                f"{font_arg}:"
+                f"text='{description_escaped}':"
+                "fontcolor=#f1f4ff:"
+                "fontsize=min(h*0.042\\,40):"
+                "x=(w-text_w)/2:"
+                "y=h*0.56:"
+                "line_spacing=8:"
+                "shadowcolor=#000000@0.78:"
+                "shadowx=1:shadowy=1:"
+                f"alpha='{description_alpha}'"
+            ),
+            "format=yuv420p",
+        ]
+
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                filter_parts[0],
+                "-vf",
+                ",".join(filter_parts[1:]),
+                "-t",
+                f"{duration:.3f}",
+                "-r",
+                str(self._fps),
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                str(output_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def _resolve_intro_font_arg(self) -> str:
+        candidates = [
+            Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
+            Path("/System/Library/Fonts/Supplemental/Helvetica.ttc"),
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+            Path("/usr/share/fonts/dejavu/DejaVuSans.ttf"),
+            Path("C:/Windows/Fonts/arial.ttf"),
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return f"fontfile={self._escape_drawtext(str(candidate))}"
+        return "font=Sans"
+
+    def _wrap_intro_description(self, text: str) -> str:
+        lines = textwrap.wrap(text.strip(), width=52)
+        if not lines:
+            return ""
+        return "\n".join(lines[:3])
+
+    def _escape_drawtext(self, value: str) -> str:
+        escaped = value.replace("\\", "\\\\")
+        escaped = escaped.replace(":", "\\:")
+        escaped = escaped.replace("'", "\\'")
+        escaped = escaped.replace("%", "\\%")
+        escaped = escaped.replace("\n", "\\n")
+        return escaped
 
     def _render_scene_clip(
         self, *, image_path: Path, duration: float, output_path: Path

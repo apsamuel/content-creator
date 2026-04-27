@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -15,7 +16,7 @@ from uuid import uuid4
 
 from content_creator.config import AppConfig
 from content_creator.hf_client import HuggingFaceGateway
-from content_creator.media import AudioOverlayEvent, MediaAssembler
+from content_creator.media import AudioOverlayEvent, CinematicIntroCard, MediaAssembler
 from content_creator.planner import ScenePlanner, ScenePlan, VideoPromptPlan
 from content_creator.profanity_sfx import (
     build_profanity_sfx_plan,
@@ -43,6 +44,8 @@ def wrap_transcription(text: str, *, width: int = 100) -> str:
 
 
 class VideoGenerationPipeline:
+    _DEFAULT_CINEMATIC_INTRO_DURATION_SECONDS = 5.8
+
     def __init__(
         self,
         config: AppConfig,
@@ -76,6 +79,8 @@ class VideoGenerationPipeline:
         video_prompt: str | None,
         output_path: Path,
         generate_video_prompt: bool = False,
+        cinematic_intro: bool = False,
+        cinematic_intro_duration: float = _DEFAULT_CINEMATIC_INTRO_DURATION_SECONDS,
         image_workers: int = 1,
         images_per_scene: int = 1,
         view_preclassification: bool = False,
@@ -91,6 +96,8 @@ class VideoGenerationPipeline:
             "narration_text": narration_text,
             "video_prompt": video_prompt,
             "generate_video_prompt": generate_video_prompt,
+            "cinematic_intro": cinematic_intro,
+            "cinematic_intro_duration": cinematic_intro_duration,
             "images_per_scene": images_per_scene,
         }
         self._write_manifest(run_dir, manifest)
@@ -114,6 +121,8 @@ class VideoGenerationPipeline:
             output_path=output_path,
             run_dir=run_dir,
             manifest=manifest,
+            cinematic_intro=cinematic_intro,
+            cinematic_intro_duration=cinematic_intro_duration,
             image_workers=image_workers,
             images_per_scene=images_per_scene,
             view_preclassification=view_preclassification,
@@ -127,6 +136,8 @@ class VideoGenerationPipeline:
         output_path: Path,
         chunk_seconds: float = 45.0,
         generate_video_prompt: bool = False,
+        cinematic_intro: bool = False,
+        cinematic_intro_duration: float = _DEFAULT_CINEMATIC_INTRO_DURATION_SECONDS,
         preserve_speaker: bool = False,
         diarization_speaker_count: int | None = None,
         diarization_min_speakers: int | None = None,
@@ -178,6 +189,8 @@ class VideoGenerationPipeline:
             "image_workers": image_workers,
             "images_per_scene": images_per_scene,
             "generate_video_prompt": generate_video_prompt,
+            "cinematic_intro": cinematic_intro,
+            "cinematic_intro_duration": cinematic_intro_duration,
             "video_prompt": video_prompt,
         }
         self._write_manifest(run_dir, manifest)
@@ -241,6 +254,8 @@ class VideoGenerationPipeline:
             output_path=output_path,
             run_dir=run_dir,
             manifest=manifest,
+            cinematic_intro=cinematic_intro,
+            cinematic_intro_duration=cinematic_intro_duration,
             image_workers=image_workers,
             images_per_scene=images_per_scene,
             view_preclassification=view_preclassification,
@@ -818,6 +833,8 @@ class VideoGenerationPipeline:
         output_path: Path,
         run_dir: Path,
         manifest: dict[str, object] | None = None,
+        cinematic_intro: bool = False,
+        cinematic_intro_duration: float = _DEFAULT_CINEMATIC_INTRO_DURATION_SECONDS,
         image_workers: int = 1,
         images_per_scene: int = 1,
         view_preclassification: bool = False,
@@ -1133,6 +1150,19 @@ class VideoGenerationPipeline:
             self._write_manifest(run_dir, manifest)
 
         manifest["status"] = "assembling_video"
+        intro_card: CinematicIntroCard | None = None
+        if cinematic_intro:
+            intro_card = self._build_cinematic_intro_card(
+                narration_text=narration_text, duration_seconds=cinematic_intro_duration
+            )
+            manifest["cinematic_intro"] = {
+                "enabled": True,
+                "title": intro_card.title,
+                "description": intro_card.description,
+                "duration_seconds": intro_card.duration_seconds,
+            }
+        else:
+            manifest["cinematic_intro"] = {"enabled": False}
         self._write_manifest(run_dir, manifest)
         self._status("🎬 Assembling video with ffmpeg")
         final_path = self._media.render_video(
@@ -1141,6 +1171,7 @@ class VideoGenerationPipeline:
             audio_path=audio_path,
             output_path=output_path,
             work_dir=run_dir,
+            cinematic_intro=intro_card,
         )
         manifest["output"] = str(final_path)
         manifest["audio"] = str(audio_path)
@@ -1153,6 +1184,95 @@ class VideoGenerationPipeline:
         self._write_manifest(run_dir, manifest)
         self._status("✅ Video generation complete")
         return final_path
+
+    def _build_cinematic_intro_card(
+        self, *, narration_text: str, duration_seconds: float
+    ) -> CinematicIntroCard:
+        self._status("🎞️ Generating cinematic intro title and description")
+        resolved_duration = max(2.0, float(duration_seconds))
+        fallback = CinematicIntroCard(
+            title="Tonight on Accidental Genius",
+            description=(
+                "A deeply serious brief delivered with enough chaos to keep everyone awake."
+            ),
+            duration_seconds=resolved_duration,
+        )
+
+        try:
+            prompt = self._build_cinematic_intro_prompt(narration_text=narration_text)
+            raw = self._gateway.generate_text(prompt)
+            payload = self._extract_json_payload(raw)
+            if payload is None:
+                return fallback
+
+            title = self._normalize_cinematic_line(str(payload.get("title", "")))
+            description = self._normalize_cinematic_line(
+                str(payload.get("description", ""))
+            )
+            if not title:
+                title = fallback.title
+            if not description:
+                description = fallback.description
+
+            return CinematicIntroCard(
+                title=self._truncate_words(title, max_words=12, max_chars=86),
+                description=self._truncate_words(
+                    description, max_words=24, max_chars=170
+                ),
+                duration_seconds=resolved_duration,
+            )
+        except Exception as exc:
+            self._status(
+                f"⚠️ Cinematic intro copy generation failed; using fallback: {exc}"
+            )
+            return fallback
+
+    def _build_cinematic_intro_prompt(self, *, narration_text: str) -> str:
+        snippet = narration_text.strip()
+        if len(snippet) > 1200:
+            snippet = snippet[:1200].rstrip() + "..."
+        return (
+            "You are writing a cinematic title card for a short-form video. "
+            "Return valid JSON only with this exact schema: "
+            '{"title": "...", "description": "..."}. '
+            "Requirements: title must be ironic, witty, and comedic while staying clean for broad audiences; "
+            "4 to 10 words; no hashtags; no emoji; no profanity. "
+            "Description must be one sentence, ironic/witty/comedic, and under 150 characters. "
+            "Do not include quotes around title or description text. "
+            "Narration/transcript context:\n"
+            f"{snippet}"
+        )
+
+    def _extract_json_payload(self, text: str) -> dict[str, object] | None:
+        candidate = text.strip()
+        try:
+            payload = json.loads(candidate)
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            pass
+
+        match = re.search(r"\{.*\}", candidate, flags=re.DOTALL)
+        if not match:
+            return None
+        try:
+            payload = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+        if isinstance(payload, dict):
+            return payload
+        return None
+
+    def _normalize_cinematic_line(self, text: str) -> str:
+        return " ".join(text.strip().strip('"').strip("'").split())
+
+    def _truncate_words(self, text: str, *, max_words: int, max_chars: int) -> str:
+        words = text.split()
+        if len(words) > max_words:
+            text = " ".join(words[:max_words])
+        if len(text) > max_chars:
+            text = text[: max_chars - 1].rstrip() + "..."
+        return text
 
     def _build_scene_frame_prompt(
         self,

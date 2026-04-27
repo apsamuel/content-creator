@@ -28,6 +28,8 @@ Use `from-audio` when you already have narration audio and want matching visuals
   - `--video-prompt TEXT`, or
   - `--generate-video-prompt`
 - Optional:
+  - `--cinematic-intro / --no-cinematic-intro` (default `--no-cinematic-intro`)
+  - `--cinematic-intro-duration FLOAT` (default `5.8`, range `2.0` to `20.0`)
   - `--image-workers INTEGER` (default `HF_IMAGE_WORKERS` or `1`)
   - `--images-per-scene INTEGER` (default `HF_IMAGES_PER_SCENE` or `1`)
   - `--chunk-seconds FLOAT` (default `45.0`; set to `0` to disable chunking)
@@ -62,6 +64,8 @@ Use `from-audio` when you already have narration audio and want matching visuals
 - If `--content-safety` is enabled, transcript text is labeled for unsafe content.
 - If `--content-safety-filter` is also enabled, flagged chunks are dropped before scene planning.
 - If `--profanity-sfx` is enabled, word-level timestamps are used to replace profane words in final audio with effects from the selected sound pack.
+- `--cinematic-intro` adds an LLM-generated witty title and short description as a cinematic opening card before main content begins.
+- `--cinematic-intro-duration` controls how long the intro card is displayed when `--cinematic-intro` is enabled.
 - `--image-workers` controls parallel scene image generation after planning completes.
 - `--images-per-scene` controls how many coherent image variants are generated per scene clip before ffmpeg assembly.
 - `--view-preclassification` prints the planner's preclassification block after LLM analysis.
@@ -121,6 +125,8 @@ Use explicit worker counts and print preclassification details:
 content-creator from-audio \
   --audio-file ./assets/voiceover.mp3 \
   --generate-video-prompt \
+  --cinematic-intro \
+  --cinematic-intro-duration 8.0 \
   --images-per-scene 3 \
   --transcribe-workers 3 \
   --image-workers 2 \
