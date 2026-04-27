@@ -2,6 +2,11 @@
 
 This directory contains detailed, command-level documentation for the content-creator CLI.
 
+## Feature Guides
+
+- [Cinematic Transitions Guide](../CINEMATIC_TRANSITIONS.md) — Modern transition standards for video generation
+- [Ensemble Preclassification](../docs/CINEMATIC_TRANSITIONS.md#production-workflow) — Risk scoring and visual intensity recommendations
+
 ## Command Docs
 
 - [Global CLI options](commands/global-options.md)
@@ -11,6 +16,7 @@ This directory contains detailed, command-level documentation for the content-cr
 - [doctor command](commands/doctor.md)
 - [lexicon-doctor command](commands/lexicon-doctor.md)
 - [profanity-debug command](commands/profanity-debug.md)
+- [calibrate command](commands/calibrate.md)
 
 ## How to use these docs
 

@@ -122,7 +122,8 @@ def test_build_scenes_falls_back_to_video_prompt_when_json_missing() -> None:
     scenes = scene_plan.scenes
 
     assert len(scenes) >= 3
-    assert all(scene.prompt == "Fallback visual direction" for scene in scenes)
+    # All scenes should contain the fallback visual direction (may have transition guidance appended)
+    assert all("Fallback visual direction" in scene.prompt for scene in scenes)
 
 
 def test_prepare_image_prompt_rotates_balanced_compositions() -> None:
@@ -200,6 +201,34 @@ def test_generate_video_prompt_uses_llm_text() -> None:
                             "reason": "The speaker uses curious and appreciative language.",
                         }
                     ],
+                    "conversation_insights": {
+                        "conversation_type": {
+                            "label": "CasualChat",
+                            "confidence_score": 0.64,
+                            "reason": "The transcript is reflective and descriptive rather than task-driven.",
+                        },
+                        "primary_goal": {
+                            "label": "Inform",
+                            "confidence_score": 0.59,
+                            "reason": "The speaker mainly describes observations and atmosphere.",
+                        },
+                        "participant_dynamic": {
+                            "label": "Informational",
+                            "confidence_score": 0.67,
+                            "reason": "There is no clear push-pull interaction between participants.",
+                        },
+                        "decision_signal": {
+                            "label": "NoDecision",
+                            "confidence_score": 0.88,
+                            "reason": "The transcript contains no explicit decision outcomes.",
+                        },
+                        "conflict_level": {
+                            "label": "Low",
+                            "confidence_score": 0.9,
+                            "reason": "The language is calm and not adversarial.",
+                        },
+                        "concise_summary": "A descriptive, low-conflict conversational passage with no concrete decision point.",
+                    },
                 }
             ),
         ]
@@ -247,12 +276,23 @@ def test_generate_video_prompt_uses_llm_text() -> None:
         ].sentiment
         == "Positive"
     )
+    assert plan.preclassification.conversation_insights is not None
+    assert (
+        plan.preclassification.conversation_insights.conversation_type.label
+        == "CasualChat"
+    )
+    assert plan.preclassification.conversation_insights.primary_goal.label == "Inform"
+    assert (
+        plan.preclassification.conversation_insights.concise_summary
+        == "A descriptive, low-conflict conversational passage with no concrete decision point"
+    )
     assert '"has_foul_language"' in llm.prompts[0]
     assert "80s/90s retro anime aesthetic" in llm.prompts[0]
     assert "low-angle hero framing" in llm.prompts[0]
     assert "dynamic handheld framing" in llm.prompts[0]
     assert '"truthfulness"' in llm.prompts[1]
     assert '"speaker_sentiment"' in llm.prompts[1]
+    assert '"conversation_insights"' in llm.prompts[1]
     assert plan.prompts is not None
     assert "video_prompt_generation" in plan.prompts
     assert "analysis" in plan.prompts
@@ -646,3 +686,48 @@ def test_generate_video_prompt_adds_ensemble_scorecard() -> None:
         "vivid",
     }
     assert len(scorecard.signals) >= 5
+
+
+def test_build_scenes_applies_cinematic_transitions() -> None:
+    """Verify that cinematic transitions are applied between scenes."""
+    llm_response = """{
+        "story_anchor": "A journey unfolds",
+        "scenes": [
+            {"prompt": "Scene 1", "summary": "Opening", "continuity": "Establish location"},
+            {"prompt": "Scene 2", "summary": "Middle", "continuity": "Shift focus"}
+        ]
+    }"""
+    llm = StubLLM(llm_response)
+    planner = ScenePlanner(llm)
+
+    scene_plan = planner.build_scenes(
+        narration_text="A story of action and adventure",
+        video_prompt="Dynamic action sequence",
+        total_duration_seconds=10.0,
+    )
+    scenes = scene_plan.scenes
+
+    # Verify we have scenes
+    assert len(scenes) >= 2
+
+    # Verify all scenes except the last have transitions
+    for scene in scenes[:-1]:
+        assert (
+            scene.transition_to_next is not None
+        ), "Non-final scenes should have transitions"
+        assert scene.transition_to_next.transition_type in {
+            "dissolve",
+            "match_cut",
+            "whip_pan",
+            "focus_shift",
+            "color_match",
+            "light_leak",
+            "tracking",
+            "bokeh",
+        }
+        assert scene.transition_to_next.duration_frames > 0
+        assert scene.transition_to_next.intensity in {"subtle", "moderate", "dramatic"}
+        assert "[TRANSITION:" in scene.prompt
+
+    # Last scene should not have a transition
+    assert scenes[-1].transition_to_next is None

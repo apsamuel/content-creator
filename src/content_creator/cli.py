@@ -1066,3 +1066,138 @@ def profanity_debug(
             )
 
     _run_with_debug(ctx, _operation)
+
+
+@cli.command("calibrate")
+@click.option(
+    "--manifest-old",
+    "manifest_old_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Path to the old manifest.json (baseline/LLM-only preclassification).",
+)
+@click.option(
+    "--manifest-new",
+    "manifest_new_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Path to the new manifest.json (ensemble-enhanced preclassification).",
+)
+@click.option(
+    "--output",
+    "output_path",
+    default=None,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Optional path to write calibration report JSON; prints to stdout if omitted.",
+)
+@click.pass_context
+def calibrate(
+    ctx: click.Context,
+    manifest_old_path: Path,
+    manifest_new_path: Path,
+    output_path: Path | None,
+) -> None:
+    """Compare old (LLM-only) vs new (ensemble) preclassification for calibration."""
+    import json
+
+    def _operation() -> None:
+        try:
+            old_manifest = json.loads(manifest_old_path.read_text(encoding="utf-8"))
+            new_manifest = json.loads(manifest_new_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise click.ClickException(f"Failed to load manifest: {exc}") from exc
+
+        old_preclass = old_manifest.get("video_prompt_preclassification", {})
+        new_preclass = new_manifest.get("video_prompt_preclassification", {})
+
+        # Extract key metrics
+        old_mood = old_preclass.get("mood", "N/A")
+        new_mood = new_preclass.get("mood", "N/A")
+
+        old_truthfulness = old_preclass.get("truthfulness_assessment", {})
+        new_truthfulness = new_preclass.get("truthfulness_assessment", {})
+
+        old_ensemble = old_preclass.get("ensemble_scorecard", {})
+        new_ensemble = new_preclass.get("ensemble_scorecard", {})
+
+        old_risk_score = old_ensemble.get("weighted_risk_score", "N/A")
+        new_risk_score = new_ensemble.get("weighted_risk_score", "N/A")
+
+        old_risk_level = old_ensemble.get("risk_level", "N/A")
+        new_risk_level = new_ensemble.get("risk_level", "N/A")
+
+        old_intensity = old_ensemble.get("recommended_visual_intensity", "N/A")
+        new_intensity = new_ensemble.get("recommended_visual_intensity", "N/A")
+
+        # Build comparison report
+        report = {
+            "calibration_report": True,
+            "old_manifest": str(manifest_old_path),
+            "new_manifest": str(manifest_new_path),
+            "comparison": {
+                "mood": {
+                    "old": old_mood,
+                    "new": new_mood,
+                    "changed": old_mood != new_mood,
+                },
+                "truthfulness": {
+                    "old": old_truthfulness.get("label", "N/A"),
+                    "new": new_truthfulness.get("label", "N/A"),
+                    "old_confidence": old_truthfulness.get("confidence_score", "N/A"),
+                    "new_confidence": new_truthfulness.get("confidence_score", "N/A"),
+                },
+                "ensemble_scoring": {
+                    "old_risk_score": old_risk_score,
+                    "new_risk_score": new_risk_score,
+                    "risk_score_delta": (
+                        round(float(new_risk_score) - float(old_risk_score), 3)
+                        if isinstance(new_risk_score, (int, float))
+                        and isinstance(old_risk_score, (int, float))
+                        else "N/A"
+                    ),
+                    "old_risk_level": old_risk_level,
+                    "new_risk_level": new_risk_level,
+                    "risk_level_changed": old_risk_level != new_risk_level,
+                    "old_visual_intensity": old_intensity,
+                    "new_visual_intensity": new_intensity,
+                    "visual_intensity_changed": old_intensity != new_intensity,
+                },
+                "signal_count": {
+                    "old_signals": len(old_ensemble.get("signals", [])),
+                    "new_signals": len(new_ensemble.get("signals", [])),
+                },
+            },
+        }
+
+        # Add warnings if present
+        if old_ensemble.get("warnings"):
+            report["old_warnings"] = old_ensemble.get("warnings")
+        if new_ensemble.get("warnings"):
+            report["new_warnings"] = new_ensemble.get("warnings")
+
+        # Output report
+        report_json = json.dumps(report, indent=2)
+        if output_path:
+            output_path.write_text(report_json, encoding="utf-8")
+            click.echo(f"✅ Calibration report written to: {output_path}")
+        else:
+            click.echo(report_json)
+
+        # Print summary
+        click.echo("\n📊 Calibration Summary:")
+        click.echo(f"  Mood: {old_mood} → {new_mood}")
+        if isinstance(new_risk_score, (int, float)) and isinstance(
+            old_risk_score, (int, float)
+        ):
+            delta = float(new_risk_score) - float(old_risk_score)
+            direction = "↑" if delta > 0 else "↓" if delta < 0 else "→"
+            click.echo(
+                f"  Risk Score: {old_risk_score:.2f} {direction} {new_risk_score:.2f} (Δ={delta:+.3f})"
+            )
+        click.echo(f"  Risk Level: {old_risk_level} → {new_risk_level}")
+        click.echo(f"  Visual Intensity: {old_intensity} → {new_intensity}")
+        click.echo(
+            f"  Signals: {report['comparison']['signal_count']['old_signals']} → {report['comparison']['signal_count']['new_signals']}"
+        )
+
+    _run_with_debug(ctx, _operation)

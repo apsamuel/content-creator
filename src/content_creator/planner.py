@@ -8,10 +8,22 @@ from typing import Any
 
 
 @dataclass(slots=True)
+class CinematicTransition:
+    """Metadata for a cinematic transition between scenes."""
+
+    transition_type: str  # e.g. "dissolve", "match_cut", "whip_pan", "color_match", "focus_shift", "light_leak"
+    duration_frames: int  # typically 12-24 frames at 24fps = 0.5-1.0s
+    intensity: str  # "subtle", "moderate", "dramatic"
+    visual_cue: str  # specific instruction for the transition effect
+    semantic_bridge: str  # how the transition connects the scenes narratively
+
+
+@dataclass(slots=True)
 class Scene:
     index: int
     prompt: str
     duration_seconds: float
+    transition_to_next: CinematicTransition | None = None
 
 
 @dataclass(slots=True)
@@ -22,6 +34,7 @@ class VideoPromptPreclassification:
     sentence_count: int
     truthfulness_assessment: "TranscriptAssessment"
     interaction_style_assessment: "InteractionStyleAssessment"
+    conversation_insights: "ConversationInsights | None" = None
     ensemble_scorecard: "PreclassificationEnsembleScorecard | None" = None
 
 
@@ -70,6 +83,16 @@ class InteractionStyleAssessment:
 
 
 @dataclass(slots=True)
+class ConversationInsights:
+    conversation_type: TranscriptAssessment
+    primary_goal: TranscriptAssessment
+    participant_dynamic: TranscriptAssessment
+    decision_signal: TranscriptAssessment
+    conflict_level: TranscriptAssessment
+    concise_summary: str
+
+
+@dataclass(slots=True)
 class VideoPromptPlan:
     video_prompt: str
     preclassification: VideoPromptPreclassification | None
@@ -87,6 +110,9 @@ class ScenePlanner:
         "80s/90s retro anime aesthetic, vibrant colors, cel shading, detailed "
         "illustration, sharp linework, dramatic composition, expressive characters, "
         "subtle camera-shake energy, Studio Ghibli and Makoto Shinkai-inspired artistry"
+        "characters are primarily african american, latino or european, with a gritty, dynamic, and cinematic visual style that emphasizes strong silhouettes"
+        "the characters in this story are communicating by phone, cell phones, pay phones, and face-to-face, and the visuals should reflect the energy and emotional tone of their interactions"
+        "gritty, american urban cityscapes and characters with a dark edge, dynamic action poses, and a moody atmosphere"
     )
     _COMPOSITION_GUIDANCE = (
         "favor still-image-friendly composition cues such as low-angle hero framing, "
@@ -171,7 +197,11 @@ class ScenePlanner:
         raw = self._llm.generate_text(video_prompt_prompt)
         payload = self._extract_json(raw)
         analysis_prompt = self._build_analysis_prompt(narration_text=narration_text)
-        truthfulness_assessment, interaction_style_assessment = self._classify_analysis(
+        (
+            truthfulness_assessment,
+            interaction_style_assessment,
+            conversation_insights,
+        ) = self._classify_analysis(
             narration_text=narration_text, prompt=analysis_prompt
         )
 
@@ -190,6 +220,7 @@ class ScenePlanner:
             sentence_count=self._count_sentences(narration_text),
             truthfulness_assessment=truthfulness_assessment,
             interaction_style_assessment=interaction_style_assessment,
+            conversation_insights=conversation_insights,
             ensemble_scorecard=self._build_ensemble_scorecard(
                 narration_text=narration_text,
                 mood=mood,
@@ -209,7 +240,7 @@ class ScenePlanner:
 
     def _classify_analysis(
         self, *, narration_text: str, prompt: str | None = None
-    ) -> tuple[TranscriptAssessment, InteractionStyleAssessment]:
+    ) -> tuple[TranscriptAssessment, InteractionStyleAssessment, ConversationInsights]:
         if prompt is None:
             prompt = self._build_analysis_prompt(narration_text=narration_text)
         raw = self._llm.generate_text(prompt)
@@ -265,7 +296,14 @@ class ScenePlanner:
                 payload.get("speaker_sentiment")
             ),
         )
-        return truthfulness_assessment, interaction_style_assessment
+        conversation_insights = self._parse_conversation_insights(
+            payload.get("conversation_insights")
+        )
+        return (
+            truthfulness_assessment,
+            interaction_style_assessment,
+            conversation_insights,
+        )
 
     def build_scenes(
         self,
@@ -320,7 +358,190 @@ class ScenePlanner:
                 )
             )
             previous_scene_summary = summary or prompt_text
+
+        # Apply cinematic transitions between scenes
+        scenes = self._apply_cinematic_transitions(
+            scenes=scenes, narration_text=narration_text
+        )
+
         return ScenePlan(scenes=scenes, scene_prompt=scene_prompt)
+
+    def _apply_cinematic_transitions(
+        self, *, scenes: list[Scene], narration_text: str
+    ) -> list[Scene]:
+        """Apply modern cinematic transitions between consecutive scenes."""
+        if len(scenes) < 2:
+            return scenes
+
+        updated_scenes = []
+        for idx, scene in enumerate(scenes):
+            if idx < len(scenes) - 1:
+                next_scene = scenes[idx + 1]
+                transition = self._select_cinematic_transition(
+                    current_idx=idx,
+                    current_prompt=scene.prompt,
+                    next_prompt=next_scene.prompt,
+                    total_scenes=len(scenes),
+                    narration_text=narration_text,
+                )
+                updated_scenes.append(
+                    Scene(
+                        index=scene.index,
+                        prompt=self._inject_transition_guidance(
+                            scene_prompt=scene.prompt,
+                            transition=transition,
+                            is_exit=True,
+                        ),
+                        duration_seconds=scene.duration_seconds,
+                        transition_to_next=transition,
+                    )
+                )
+            else:
+                updated_scenes.append(scene)
+
+        return updated_scenes
+
+    def _select_cinematic_transition(
+        self,
+        *,
+        current_idx: int,
+        current_prompt: str,
+        next_prompt: str,
+        total_scenes: int,
+        narration_text: str,
+    ) -> CinematicTransition:
+        """Select an appropriate cinematic transition based on scene context."""
+        # Determine pacing: faster transitions for action, slower for emotional beats
+        pacing_factor = current_idx / max(1, total_scenes - 1)
+        scene_position = (
+            "opening"
+            if current_idx == 0
+            else "closing" if current_idx == total_scenes - 2 else "middle"
+        )
+
+        # Modern transition library with semantic rules
+        transition_strategies = [
+            {
+                "name": "dissolve",
+                "intensity": "subtle",
+                "duration_frames": 18,
+                "cue": "soft cross-dissolve blend between scenes, maintaining luminosity matching",
+                "best_for": "emotional continuity, same-location transitions",
+            },
+            {
+                "name": "match_cut",
+                "intensity": "moderate",
+                "duration_frames": 12,
+                "cue": "match object shape, color, or motion across the cut—cuts occur on visual rhythm match, not abrupt",
+                "best_for": "narrative continuity, connecting thematically related elements",
+            },
+            {
+                "name": "whip_pan",
+                "intensity": "dramatic",
+                "duration_frames": 8,
+                "cue": "rapid camera pan motion that obscures screen, revealing next scene as destination—implies urgency or action",
+                "best_for": "action sequences, high-energy transitions",
+            },
+            {
+                "name": "focus_shift",
+                "intensity": "moderate",
+                "duration_frames": 15,
+                "cue": "current scene defocuses/blurs smoothly into next scene focus—simulates shallow depth of field transition",
+                "best_for": "intimate moments, shifting attention between subjects",
+            },
+            {
+                "name": "color_match",
+                "intensity": "subtle",
+                "duration_frames": 20,
+                "cue": "transition via dominant color palette shift—current scene's colors gradually become next scene's—creates visual harmony",
+                "best_for": "mood transitions, maintaining aesthetic cohesion",
+            },
+            {
+                "name": "light_leak",
+                "intensity": "dramatic",
+                "duration_frames": 10,
+                "cue": "warm light beam or flare sweeps across frame, obscuring transition—reveals next scene as light clears",
+                "best_for": "hopeful/revealing moments, cinematic drama",
+            },
+            {
+                "name": "tracking",
+                "intensity": "moderate",
+                "duration_frames": 14,
+                "cue": "smooth tracking camera motion (dolly/crane) bridges both scenes—continuous motion implies spatial connection",
+                "best_for": "spatial storytelling, environment-to-environment transitions",
+            },
+            {
+                "name": "bokeh",
+                "intensity": "subtle",
+                "duration_frames": 16,
+                "cue": "transition via out-of-focus foreground elements (bokeh lights)—implies cinematic depth and photography",
+                "best_for": "romantic/dreamy sequences, visual elegance",
+            },
+        ]
+
+        # Select transition based on position and pacing
+        if scene_position == "opening":
+            # Opening scenes use subtle, welcoming transitions
+            selected = next(
+                (
+                    t
+                    for t in transition_strategies
+                    if t["intensity"] in ("subtle", "moderate")
+                ),
+                transition_strategies[0],
+            )
+        elif scene_position == "closing":
+            # Closing transitions can be more dramatic
+            selected = next(
+                (
+                    t
+                    for t in transition_strategies
+                    if t["name"] in ("light_leak", "dissolve")
+                ),
+                transition_strategies[0],
+            )
+        else:
+            # Middle scenes: rotate through transitions for variety
+            strategy_idx = current_idx % len(transition_strategies)
+            selected = transition_strategies[strategy_idx]
+
+        # Adjust intensity based on content: action/energy → more dramatic
+        if "action" in narration_text.lower() or "fast" in narration_text.lower():
+            if selected["intensity"] != "dramatic":
+                selected = next(
+                    (t for t in transition_strategies if t["intensity"] == "dramatic"),
+                    selected,
+                )
+
+        return CinematicTransition(
+            transition_type=selected["name"],
+            duration_frames=selected["duration_frames"],
+            intensity=selected["intensity"],
+            visual_cue=selected["cue"],
+            semantic_bridge=f"Transition from scene {current_idx + 1} to scene {current_idx + 2}",
+        )
+
+    def _inject_transition_guidance(
+        self,
+        *,
+        scene_prompt: str,
+        transition: CinematicTransition,
+        is_exit: bool = True,
+    ) -> str:
+        """Inject transition guidance into scene prompt for generation."""
+        if not is_exit:
+            return scene_prompt
+
+        # Add exit-frame guidance that prepares for the transition
+        exit_guidance = (
+            f"\n[TRANSITION: {transition.transition_type.upper()}] "
+            f"End frame composition: {transition.visual_cue} "
+            f"Duration {transition.duration_frames} frames at 24fps. "
+            f"Intensity: {transition.intensity}. "
+            f"Prepare final frame for smooth visual exit."
+        )
+
+        return scene_prompt + exit_guidance
 
     def _split_narration(self, text: str, n: int) -> list[str]:
         """Split narration text into n roughly equal sentence-based chunks."""
@@ -415,7 +636,15 @@ Return valid JSON only with this exact schema:
     "certainty_hedging": {{"label": "Confident|Balanced|HeavilyHedged", "confidence_score": 0.0, "reason": "short explanation"}},
     "persuasion_intent": {{"label": "Strong|Moderate|LowOrNone", "confidence_score": 0.0, "reason": "short explanation"}},
     "claim_density": {{"label": "High|Medium|Low", "confidence_score": 0.0, "reason": "short explanation"}},
-    "speaker_sentiment": [{{"speaker": "speaker identifier", "sentiment": "Positive|Negative|Neutral|Mixed", "confidence_score": 0.0, "reason": "short explanation"}}]
+    "speaker_sentiment": [{{"speaker": "speaker identifier", "sentiment": "Positive|Negative|Neutral|Mixed", "confidence_score": 0.0, "reason": "short explanation"}}],
+    "conversation_insights": {{
+        "conversation_type": {{"label": "Support|Sales|Interview|Meeting|Debate|CasualChat|Coaching|IncidentReview|Negotiation|Unknown", "confidence_score": 0.0, "reason": "short explanation"}},
+        "primary_goal": {{"label": "Inform|Persuade|ResolveIssue|Negotiate|Socialize|Plan|Unknown", "confidence_score": 0.0, "reason": "short explanation"}},
+        "participant_dynamic": {{"label": "Collaborative|Adversarial|Mixed|Informational|Unknown", "confidence_score": 0.0, "reason": "short explanation"}},
+        "decision_signal": {{"label": "ClearDecision|LeaningDecision|NoDecision|Unknown", "confidence_score": 0.0, "reason": "short explanation"}},
+        "conflict_level": {{"label": "High|Medium|Low", "confidence_score": 0.0, "reason": "short explanation"}},
+        "concise_summary": "one sentence summary of the conversation type and progression"
+    }}
 }}
 
 Truthfulness constraints:
@@ -429,6 +658,11 @@ Interaction style constraints:
 - Keep each reason to one sentence.
 - If speakers are explicitly labeled, preserve those labels.
 - If speakers are not labeled, return one item with speaker set to Unknown.
+
+Conversation insights constraints:
+- Base the answer only on the transcript itself.
+- Use Unknown when the transcript does not provide enough evidence.
+- concise_summary must be one sentence and avoid external facts.
 
 General constraints:
 - confidence_score values must be between 0 and 1.
@@ -571,6 +805,88 @@ Transcript:
                 reason="Sentiment is estimated from the transcript only and no speaker-specific structure was available.",
             )
         ]
+
+    def _parse_conversation_insights(self, value: Any) -> ConversationInsights:
+        if not isinstance(value, dict):
+            value = {}
+
+        summary = self._normalize_fragment(str(value.get("concise_summary", "")))
+        if not summary:
+            summary = "Conversation type is uncertain from transcript-only evidence and the exchange appears mixed in intent."
+
+        return ConversationInsights(
+            conversation_type=self._parse_dimension_assessment(
+                value.get("conversation_type"),
+                allowed_labels={
+                    "Support",
+                    "Sales",
+                    "Interview",
+                    "Meeting",
+                    "Debate",
+                    "CasualChat",
+                    "Coaching",
+                    "IncidentReview",
+                    "Negotiation",
+                    "Unknown",
+                },
+                fallback_reason=(
+                    "Conversation type is estimated from transcript cues only."
+                ),
+                default_label="Unknown",
+            ),
+            primary_goal=self._parse_dimension_assessment(
+                value.get("primary_goal"),
+                allowed_labels={
+                    "Inform",
+                    "Persuade",
+                    "ResolveIssue",
+                    "Negotiate",
+                    "Socialize",
+                    "Plan",
+                    "Unknown",
+                },
+                fallback_reason=(
+                    "Primary goal is estimated from transcript cues only."
+                ),
+                default_label="Unknown",
+            ),
+            participant_dynamic=self._parse_dimension_assessment(
+                value.get("participant_dynamic"),
+                allowed_labels={
+                    "Collaborative",
+                    "Adversarial",
+                    "Mixed",
+                    "Informational",
+                    "Unknown",
+                },
+                fallback_reason=(
+                    "Participant dynamic is estimated from transcript cues only."
+                ),
+                default_label="Unknown",
+            ),
+            decision_signal=self._parse_dimension_assessment(
+                value.get("decision_signal"),
+                allowed_labels={
+                    "ClearDecision",
+                    "LeaningDecision",
+                    "NoDecision",
+                    "Unknown",
+                },
+                fallback_reason=(
+                    "Decision signal is estimated from transcript cues only."
+                ),
+                default_label="Unknown",
+            ),
+            conflict_level=self._parse_dimension_assessment(
+                value.get("conflict_level"),
+                allowed_labels={"High", "Medium", "Low"},
+                fallback_reason=(
+                    "Conflict level is estimated from transcript cues only."
+                ),
+                default_label="Low",
+            ),
+            concise_summary=summary,
+        )
 
     def _build_ensemble_scorecard(
         self,

@@ -8,6 +8,7 @@ import pytest
 
 from content_creator.config import AppConfig, ModelConfig
 from content_creator.planner import (
+    ConversationInsights,
     InteractionStyleAssessment,
     Scene,
     ScenePlan,
@@ -149,6 +150,34 @@ class FakePlanner:
                             reason="The tone is mostly even and descriptive.",
                         )
                     ],
+                ),
+                conversation_insights=ConversationInsights(
+                    conversation_type=TranscriptAssessment(
+                        label="Meeting",
+                        confidence_score=0.71,
+                        reason="The exchange appears focused on status and coordination updates.",
+                    ),
+                    primary_goal=TranscriptAssessment(
+                        label="Plan",
+                        confidence_score=0.68,
+                        reason="The participants discuss progress and next-step alignment.",
+                    ),
+                    participant_dynamic=TranscriptAssessment(
+                        label="Collaborative",
+                        confidence_score=0.74,
+                        reason="The tone is constructive and mutually aligned.",
+                    ),
+                    decision_signal=TranscriptAssessment(
+                        label="LeaningDecision",
+                        confidence_score=0.57,
+                        reason="There are directional cues but no explicit final commitment.",
+                    ),
+                    conflict_level=TranscriptAssessment(
+                        label="Low",
+                        confidence_score=0.86,
+                        reason="No adversarial or confrontational language is present.",
+                    ),
+                    concise_summary="A collaborative planning conversation with low conflict and an emerging, but not finalized, decision.",
                 ),
             ),
         )
@@ -531,6 +560,34 @@ def test_generate_from_text_can_generate_video_prompt(
                     "reason": "The tone is mostly even and descriptive.",
                 }
             ],
+        },
+        "conversation_insights": {
+            "conversation_type": {
+                "label": "Meeting",
+                "confidence_score": 0.71,
+                "reason": "The exchange appears focused on status and coordination updates.",
+            },
+            "primary_goal": {
+                "label": "Plan",
+                "confidence_score": 0.68,
+                "reason": "The participants discuss progress and next-step alignment.",
+            },
+            "participant_dynamic": {
+                "label": "Collaborative",
+                "confidence_score": 0.74,
+                "reason": "The tone is constructive and mutually aligned.",
+            },
+            "decision_signal": {
+                "label": "LeaningDecision",
+                "confidence_score": 0.57,
+                "reason": "There are directional cues but no explicit final commitment.",
+            },
+            "conflict_level": {
+                "label": "Low",
+                "confidence_score": 0.86,
+                "reason": "No adversarial or confrontational language is present.",
+            },
+            "concise_summary": "A collaborative planning conversation with low conflict and an emerging, but not finalized, decision.",
         },
     }
 

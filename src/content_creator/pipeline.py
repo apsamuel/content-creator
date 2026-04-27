@@ -886,6 +886,41 @@ class VideoGenerationPipeline:
                 },
                 **(
                     {
+                        "conversation_insights": {
+                            "conversation_type": {
+                                "label": video_prompt_plan.preclassification.conversation_insights.conversation_type.label,
+                                "confidence_score": video_prompt_plan.preclassification.conversation_insights.conversation_type.confidence_score,
+                                "reason": video_prompt_plan.preclassification.conversation_insights.conversation_type.reason,
+                            },
+                            "primary_goal": {
+                                "label": video_prompt_plan.preclassification.conversation_insights.primary_goal.label,
+                                "confidence_score": video_prompt_plan.preclassification.conversation_insights.primary_goal.confidence_score,
+                                "reason": video_prompt_plan.preclassification.conversation_insights.primary_goal.reason,
+                            },
+                            "participant_dynamic": {
+                                "label": video_prompt_plan.preclassification.conversation_insights.participant_dynamic.label,
+                                "confidence_score": video_prompt_plan.preclassification.conversation_insights.participant_dynamic.confidence_score,
+                                "reason": video_prompt_plan.preclassification.conversation_insights.participant_dynamic.reason,
+                            },
+                            "decision_signal": {
+                                "label": video_prompt_plan.preclassification.conversation_insights.decision_signal.label,
+                                "confidence_score": video_prompt_plan.preclassification.conversation_insights.decision_signal.confidence_score,
+                                "reason": video_prompt_plan.preclassification.conversation_insights.decision_signal.reason,
+                            },
+                            "conflict_level": {
+                                "label": video_prompt_plan.preclassification.conversation_insights.conflict_level.label,
+                                "confidence_score": video_prompt_plan.preclassification.conversation_insights.conflict_level.confidence_score,
+                                "reason": video_prompt_plan.preclassification.conversation_insights.conflict_level.reason,
+                            },
+                            "concise_summary": video_prompt_plan.preclassification.conversation_insights.concise_summary,
+                        }
+                    }
+                    if video_prompt_plan.preclassification.conversation_insights
+                    is not None
+                    else {}
+                ),
+                **(
+                    {
                         "ensemble_scorecard": {
                             "weighted_risk_score": video_prompt_plan.preclassification.ensemble_scorecard.weighted_risk_score,
                             "risk_level": video_prompt_plan.preclassification.ensemble_scorecard.risk_level,
@@ -937,10 +972,22 @@ class VideoGenerationPipeline:
             }
         else:
             manifest["llm_prompts"] = {"scene_planning": scene_plan.scene_prompt}
-        manifest["scenes"] = [asdict(scene) for scene in scenes]
+
+        # Serialize scenes with transition data
+        manifest["scenes"] = [
+            {
+                **asdict(scene),
+                "transition_to_next": (
+                    asdict(scene.transition_to_next)
+                    if scene.transition_to_next is not None
+                    else None
+                ),
+            }
+            for scene in scenes
+        ]
         manifest["status"] = "scenes_planned"
         self._write_manifest(run_dir, manifest)
-        self._status(f"🧩 Planned {len(scenes)} scenes")
+        self._status(f"🧩 Planned {len(scenes)} scenes with cinematic transitions")
         images_dir = run_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
         scene_images_per_scene = max(1, images_per_scene)

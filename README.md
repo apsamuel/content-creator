@@ -59,6 +59,22 @@ Detailed command documentation with flowcharts is available in [docs/README.md](
 - [doctor command](docs/commands/doctor.md)
 - [lexicon-doctor command](docs/commands/lexicon-doctor.md)
 - [profanity-debug command](docs/commands/profanity-debug.md)
+- [calibrate command](docs/commands/calibrate.md)
+
+### Modern Cinematic Features
+
+**Automatic Cinematic Transitions** - The system applies modern, professional-grade transitions between scenes:
+
+- **Dissolve** (soft cross-fade) — Emotional continuity, mood changes
+- **Match Cut** (thematic connection) — Narrative bridges via visual rhyme
+- **Whip Pan** (dynamic pan) — Action, urgency, high-energy moments
+- **Focus Shift** (depth transition) — Intimate moments, attention shifts
+- **Color Match** (palette gradient) — Mood maintenance, visual harmony
+- **Light Leak** (cinematic flare) — Hopeful moments, dramatic reveals
+- **Tracking** (camera motion) — Spatial storytelling, connected spaces
+- **Bokeh** (foreground blur) — Romantic/dreamy sequences, elegance
+
+Transitions are **automatically selected** based on narrative pacing, content intensity, and scene position. Full documentation: [Cinematic Transitions Guide](docs/CINEMATIC_TRANSITIONS.md)
 
 Generate a video from text and a visual prompt:
 
