@@ -295,6 +295,12 @@ def cli(
     ),
 )
 @click.option(
+    "--cinematic-transitions/--no-cinematic-transitions",
+    default=False,
+    show_default=True,
+    help="Enable cinematic transitions between consecutive scene sequences.",
+)
+@click.option(
     "--image-workers",
     default=None,
     show_default=False,
@@ -324,6 +330,7 @@ def from_text(
     output_path: Path,
     cinematic_intro: bool,
     cinematic_intro_duration: float,
+    cinematic_transitions: bool,
     image_workers: int | None,
     images_per_scene: int | None,
     work_dir: str | None,
@@ -366,6 +373,7 @@ def from_text(
             output_path=output_path,
             cinematic_intro=cinematic_intro,
             cinematic_intro_duration=cinematic_intro_duration,
+            cinematic_transitions=cinematic_transitions,
             image_workers=resolved_image_workers,
             images_per_scene=resolved_images_per_scene,
             view_preclassification=view_preclassification,
@@ -416,6 +424,12 @@ def from_text(
         "Duration in seconds for the cinematic intro title card when "
         "--cinematic-intro is enabled."
     ),
+)
+@click.option(
+    "--cinematic-transitions/--no-cinematic-transitions",
+    default=False,
+    show_default=True,
+    help="Enable cinematic transitions between consecutive scene sequences.",
 )
 @click.option(
     "--image-workers",
@@ -560,6 +574,7 @@ def from_audio(
     output_path: Path,
     cinematic_intro: bool,
     cinematic_intro_duration: float,
+    cinematic_transitions: bool,
     image_workers: int | None,
     images_per_scene: int | None,
     chunk_seconds: float,
@@ -630,6 +645,7 @@ def from_audio(
             output_path=output_path,
             cinematic_intro=cinematic_intro,
             cinematic_intro_duration=cinematic_intro_duration,
+            cinematic_transitions=cinematic_transitions,
             image_workers=resolved_image_workers,
             images_per_scene=resolved_images_per_scene,
             chunk_seconds=chunk_seconds,

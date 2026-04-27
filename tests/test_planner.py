@@ -704,6 +704,7 @@ def test_build_scenes_applies_cinematic_transitions() -> None:
         narration_text="A story of action and adventure",
         video_prompt="Dynamic action sequence",
         total_duration_seconds=10.0,
+        cinematic_transitions=True,
     )
     scenes = scene_plan.scenes
 
@@ -731,3 +732,24 @@ def test_build_scenes_applies_cinematic_transitions() -> None:
 
     # Last scene should not have a transition
     assert scenes[-1].transition_to_next is None
+
+
+def test_build_scenes_leaves_transitions_disabled_by_default() -> None:
+    llm_response = """{
+        "story_anchor": "A journey unfolds",
+        "scenes": [
+            {"prompt": "Scene 1", "summary": "Opening", "continuity": "Establish location"},
+            {"prompt": "Scene 2", "summary": "Middle", "continuity": "Shift focus"}
+        ]
+    }"""
+    llm = StubLLM(llm_response)
+    planner = ScenePlanner(llm)
+
+    scene_plan = planner.build_scenes(
+        narration_text="A story of action and adventure",
+        video_prompt="Dynamic action sequence",
+        total_duration_seconds=10.0,
+    )
+
+    assert all(scene.transition_to_next is None for scene in scene_plan.scenes)
+    assert all("[TRANSITION:" not in scene.prompt for scene in scene_plan.scenes)

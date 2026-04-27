@@ -199,6 +199,7 @@ class FakePlanner:
         video_prompt: str,
         total_duration_seconds: float,
         max_scenes: int = 8,
+        cinematic_transitions: bool = False,
     ):
         self.calls.append((narration_text, video_prompt, total_duration_seconds))
         return ScenePlan(
@@ -248,6 +249,7 @@ class FakeMedia:
         self.height = height
         self.fps = fps
         self.last_cinematic_intro = None
+        self.last_cinematic_transitions = False
 
     def get_audio_duration(self, audio_path: Path) -> float:
         return 5.0
@@ -271,8 +273,10 @@ class FakeMedia:
         output_path: Path,
         work_dir: Path,
         cinematic_intro=None,
+        cinematic_transitions: bool = False,
     ) -> Path:
         self.last_cinematic_intro = cinematic_intro
+        self.last_cinematic_transitions = cinematic_transitions
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"video")
         return output_path
@@ -670,6 +674,32 @@ def test_generate_from_text_uses_custom_cinematic_intro_duration(
     intro_card = pipeline._media.last_cinematic_intro
     assert intro_card is not None
     assert intro_card.duration_seconds == pytest.approx(7.25)
+
+
+def test_generate_from_text_enables_cinematic_transitions_when_requested(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    pipeline = VideoGenerationPipeline(_config(tmp_path))
+    output_path = tmp_path / "out" / "cinematic-transitions.mp4"
+
+    pipeline.generate_from_text(
+        narration_text="Narration text",
+        video_prompt="Video direction",
+        output_path=output_path,
+        cinematic_transitions=True,
+    )
+
+    manifest_path = _config(tmp_path).work_dir / output_path.stem / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["cinematic_transitions"] is True
+    assert pipeline._media.last_cinematic_transitions is True
 
 
 def test_transcribe_audio_file_falls_back_without_ffmpeg(

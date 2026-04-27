@@ -92,19 +92,19 @@ class MediaAssembler:
         output_path: Path,
         work_dir: Path,
         cinematic_intro: CinematicIntroCard | None = None,
+        cinematic_transitions: bool = False,
     ) -> Path:
         clips_dir = work_dir / "clips"
         clips_dir.mkdir(parents=True, exist_ok=True)
         clip_paths: list[Path] = []
 
         image_items = list(images)
-        scene_image_sequences: list[list[Path]]
-        if image_items and all(isinstance(item, Path) for item in image_items):
-            scene_image_sequences = [[item] for item in image_items]
-        else:
-            scene_image_sequences = [
-                [Path(path) for path in image_group] for image_group in image_items
-            ]
+        scene_image_sequences: list[list[Path]] = []
+        for item in image_items:
+            if isinstance(item, Path):
+                scene_image_sequences.append([item])
+            else:
+                scene_image_sequences.append([Path(path) for path in item])
 
         if len(scene_image_sequences) != len(scenes):
             raise ValueError(
@@ -130,31 +130,35 @@ class MediaAssembler:
                 )
             clip_paths.append(clip_path)
 
-        concat_list = work_dir / "concat.txt"
-        concat_list.write_text(
-            "\n".join(f"file '{path.as_posix()}'" for path in clip_paths),
-            encoding="utf-8",
-        )
-
         stitched = work_dir / "stitched.mp4"
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                str(concat_list),
-                "-c",
-                "copy",
-                str(stitched),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        if cinematic_transitions and len(clip_paths) > 1:
+            self._stitch_with_cinematic_transitions(
+                clip_paths=clip_paths, scenes=scenes, output_path=stitched
+            )
+        else:
+            concat_list = work_dir / "concat.txt"
+            concat_list.write_text(
+                "\n".join(f"file '{path.as_posix()}'" for path in clip_paths),
+                encoding="utf-8",
+            )
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    str(concat_list),
+                    "-c",
+                    "copy",
+                    str(stitched),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
 
         final_visual_path = stitched
         intro_delay_seconds = 0.0
@@ -230,6 +234,90 @@ class MediaAssembler:
             text=True,
         )
         return output_path
+
+    def _stitch_with_cinematic_transitions(
+        self, *, clip_paths: list[Path], scenes: list[Scene], output_path: Path
+    ) -> None:
+        command: list[str] = ["ffmpeg", "-y"]
+        for clip_path in clip_paths:
+            command.extend(["-i", str(clip_path)])
+
+        minimum_frame_seconds = 1.0 / max(1, self._fps)
+        accumulated_duration = max(minimum_frame_seconds, scenes[0].duration_seconds)
+        current_label = "[0:v]"
+        filter_parts: list[str] = []
+
+        for index in range(1, len(clip_paths)):
+            transition = scenes[index - 1].transition_to_next
+            transition_name = self._map_transition_name(
+                transition_type=(
+                    transition.transition_type if transition is not None else None
+                )
+            )
+            requested_duration = self._resolve_transition_duration_seconds(transition)
+            next_scene_duration = max(
+                minimum_frame_seconds, scenes[index].duration_seconds
+            )
+
+            max_duration = max(
+                minimum_frame_seconds,
+                min(accumulated_duration, next_scene_duration) - minimum_frame_seconds,
+            )
+            transition_duration = min(requested_duration, max_duration)
+            offset = max(0.0, accumulated_duration - transition_duration)
+            output_label = f"[v{index}]"
+            filter_parts.append(
+                f"{current_label}[{index}:v]"
+                f"xfade=transition={transition_name}:"
+                f"duration={transition_duration:.3f}:offset={offset:.3f}"
+                f"{output_label}"
+            )
+            current_label = output_label
+            accumulated_duration = (
+                accumulated_duration + next_scene_duration - transition_duration
+            )
+
+        command.extend(
+            [
+                "-filter_complex",
+                ";".join(filter_parts),
+                "-map",
+                current_label,
+                "-c:v",
+                "libx264",
+                "-r",
+                str(self._fps),
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                str(output_path),
+            ]
+        )
+        subprocess.run(command, check=True, capture_output=True, text=True)
+
+    def _resolve_transition_duration_seconds(self, transition: object | None) -> float:
+        frames = 12
+        if transition is not None:
+            raw_frames = getattr(transition, "duration_frames", 12)
+            if isinstance(raw_frames, (int, float)):
+                frames = int(raw_frames)
+        seconds = frames / max(1, self._fps)
+        return max(0.2, min(1.2, float(seconds)))
+
+    def _map_transition_name(self, *, transition_type: str | None) -> str:
+        if not transition_type:
+            return "fade"
+        transition_map = {
+            "dissolve": "dissolve",
+            "match_cut": "fade",
+            "whip_pan": "wipeleft",
+            "focus_shift": "fadeblack",
+            "color_match": "fade",
+            "light_leak": "fadewhite",
+            "tracking": "slideleft",
+            "bokeh": "circleopen",
+        }
+        return transition_map.get(transition_type, "fade")
 
     def overlay_sound_effects(
         self,

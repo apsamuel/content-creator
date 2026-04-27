@@ -81,6 +81,7 @@ class VideoGenerationPipeline:
         generate_video_prompt: bool = False,
         cinematic_intro: bool = False,
         cinematic_intro_duration: float = _DEFAULT_CINEMATIC_INTRO_DURATION_SECONDS,
+        cinematic_transitions: bool = False,
         image_workers: int = 1,
         images_per_scene: int = 1,
         view_preclassification: bool = False,
@@ -98,6 +99,7 @@ class VideoGenerationPipeline:
             "generate_video_prompt": generate_video_prompt,
             "cinematic_intro": cinematic_intro,
             "cinematic_intro_duration": cinematic_intro_duration,
+            "cinematic_transitions": cinematic_transitions,
             "images_per_scene": images_per_scene,
         }
         self._write_manifest(run_dir, manifest)
@@ -123,6 +125,7 @@ class VideoGenerationPipeline:
             manifest=manifest,
             cinematic_intro=cinematic_intro,
             cinematic_intro_duration=cinematic_intro_duration,
+            cinematic_transitions=cinematic_transitions,
             image_workers=image_workers,
             images_per_scene=images_per_scene,
             view_preclassification=view_preclassification,
@@ -138,6 +141,7 @@ class VideoGenerationPipeline:
         generate_video_prompt: bool = False,
         cinematic_intro: bool = False,
         cinematic_intro_duration: float = _DEFAULT_CINEMATIC_INTRO_DURATION_SECONDS,
+        cinematic_transitions: bool = False,
         preserve_speaker: bool = False,
         diarization_speaker_count: int | None = None,
         diarization_min_speakers: int | None = None,
@@ -191,6 +195,7 @@ class VideoGenerationPipeline:
             "generate_video_prompt": generate_video_prompt,
             "cinematic_intro": cinematic_intro,
             "cinematic_intro_duration": cinematic_intro_duration,
+            "cinematic_transitions": cinematic_transitions,
             "video_prompt": video_prompt,
         }
         self._write_manifest(run_dir, manifest)
@@ -256,6 +261,7 @@ class VideoGenerationPipeline:
             manifest=manifest,
             cinematic_intro=cinematic_intro,
             cinematic_intro_duration=cinematic_intro_duration,
+            cinematic_transitions=cinematic_transitions,
             image_workers=image_workers,
             images_per_scene=images_per_scene,
             view_preclassification=view_preclassification,
@@ -835,6 +841,7 @@ class VideoGenerationPipeline:
         manifest: dict[str, object] | None = None,
         cinematic_intro: bool = False,
         cinematic_intro_duration: float = _DEFAULT_CINEMATIC_INTRO_DURATION_SECONDS,
+        cinematic_transitions: bool = False,
         image_workers: int = 1,
         images_per_scene: int = 1,
         view_preclassification: bool = False,
@@ -980,6 +987,7 @@ class VideoGenerationPipeline:
             narration_text=narration_text,
             video_prompt=resolved_video_prompt,
             total_duration_seconds=duration_seconds,
+            cinematic_transitions=cinematic_transitions,
         )
         scenes = scene_plan.scenes
         if video_prompt_plan.prompts is not None:
@@ -1004,7 +1012,10 @@ class VideoGenerationPipeline:
         ]
         manifest["status"] = "scenes_planned"
         self._write_manifest(run_dir, manifest)
-        self._status(f"🧩 Planned {len(scenes)} scenes with cinematic transitions")
+        if cinematic_transitions:
+            self._status(f"🧩 Planned {len(scenes)} scenes with cinematic transitions")
+        else:
+            self._status(f"🧩 Planned {len(scenes)} scenes")
         images_dir = run_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
         scene_images_per_scene = max(1, images_per_scene)
@@ -1172,6 +1183,7 @@ class VideoGenerationPipeline:
             output_path=output_path,
             work_dir=run_dir,
             cinematic_intro=intro_card,
+            cinematic_transitions=cinematic_transitions,
         )
         manifest["output"] = str(final_path)
         manifest["audio"] = str(audio_path)
