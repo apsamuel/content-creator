@@ -4,6 +4,7 @@ This directory contains detailed, command-level documentation for the content-cr
 
 ## Feature Guides
 
+- [Project Milestones and Goals](MILESTONES.md) — Running record of active goals, milestone decisions, and backlog items
 - [Cinematic Transitions Guide](../CINEMATIC_TRANSITIONS.md) — Modern transition standards for video generation
 - [Ensemble Preclassification](../docs/CINEMATIC_TRANSITIONS.md#production-workflow) — Risk scoring and visual intensity recommendations
 
@@ -12,6 +13,7 @@ This directory contains detailed, command-level documentation for the content-cr
 - [Global CLI options](commands/global-options.md)
 - [from-text command](commands/from-text.md)
 - [from-audio command](commands/from-audio.md)
+- [rebuild-video command](commands/rebuild-video.md)
 - [transcribe command](commands/transcribe.md)
 - [doctor command](commands/doctor.md)
 - [lexicon-doctor command](commands/lexicon-doctor.md)

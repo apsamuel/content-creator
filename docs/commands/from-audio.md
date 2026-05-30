@@ -33,6 +33,7 @@ Use `from-audio` when you already have narration audio and want matching visuals
   - `--image-workers INTEGER` (default `HF_IMAGE_WORKERS` or `1`)
   - `--images-per-scene INTEGER` (default `HF_IMAGES_PER_SCENE` or `1`)
   - `--cinematic-transitions / --no-cinematic-transitions` (default `--no-cinematic-transitions`)
+  - `--television-overlay-effects / --no-television-overlay-effects` (default `--no-television-overlay-effects`)
   - `--chunk-seconds FLOAT` (default `45.0`; set to `0` to disable chunking)
   - `--transcribe-workers INTEGER` (default `HF_TRANSCRIBE_WORKERS` or `1`)
   - `--preserve-speaker / --no-preserve-speaker` (default `--no-preserve-speaker`)
@@ -68,6 +69,7 @@ Use `from-audio` when you already have narration audio and want matching visuals
 - `--cinematic-intro` adds an LLM-generated witty title and short description as a cinematic opening card before main content begins.
 - `--cinematic-intro-duration` controls how long the intro card is displayed when `--cinematic-intro` is enabled.
 - `--cinematic-transitions` enables ffmpeg cinematic transitions between adjacent scene sequences.
+- `--television-overlay-effects` applies a procedural ffmpeg pass after scene stitching to simulate an old-television presentation using generated scanlines, vignette, noise, bezel shading, and screen padding.
 - `--image-workers` controls parallel scene image generation after planning completes.
 - `--images-per-scene` controls how many coherent image variants are generated per scene clip before ffmpeg assembly.
 - `--view-preclassification` prints the planner's preclassification block after LLM analysis.
@@ -132,6 +134,7 @@ content-creator from-audio \
   --images-per-scene 3 \
   --transcribe-workers 3 \
   --cinematic-transitions \
+  --television-overlay-effects \
   --image-workers 2 \
   --view-preclassification \
   --output ./output/generated-style-from-audio.mp4
