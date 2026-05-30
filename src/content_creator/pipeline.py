@@ -17,7 +17,13 @@ from uuid import uuid4
 from content_creator.config import AppConfig
 from content_creator.hf_client import HuggingFaceGateway
 from content_creator.media import AudioOverlayEvent, CinematicIntroCard, MediaAssembler
-from content_creator.planner import ScenePlanner, ScenePlan, VideoPromptPlan
+from content_creator.planner import (
+    CinematicTransition,
+    Scene,
+    ScenePlanner,
+    ScenePlan,
+    VideoPromptPlan,
+)
 from content_creator.profanity_sfx import (
     build_profanity_sfx_plan,
     load_profanity_words,
@@ -82,6 +88,7 @@ class VideoGenerationPipeline:
         cinematic_intro: bool = False,
         cinematic_intro_duration: float = _DEFAULT_CINEMATIC_INTRO_DURATION_SECONDS,
         cinematic_transitions: bool = False,
+        television_overlay_effects: bool = False,
         image_workers: int = 1,
         images_per_scene: int = 1,
         view_preclassification: bool = False,
@@ -100,6 +107,7 @@ class VideoGenerationPipeline:
             "cinematic_intro": cinematic_intro,
             "cinematic_intro_duration": cinematic_intro_duration,
             "cinematic_transitions": cinematic_transitions,
+            "television_overlay_effects": television_overlay_effects,
             "images_per_scene": images_per_scene,
         }
         self._write_manifest(run_dir, manifest)
@@ -126,6 +134,7 @@ class VideoGenerationPipeline:
             cinematic_intro=cinematic_intro,
             cinematic_intro_duration=cinematic_intro_duration,
             cinematic_transitions=cinematic_transitions,
+            television_overlay_effects=television_overlay_effects,
             image_workers=image_workers,
             images_per_scene=images_per_scene,
             view_preclassification=view_preclassification,
@@ -142,6 +151,7 @@ class VideoGenerationPipeline:
         cinematic_intro: bool = False,
         cinematic_intro_duration: float = _DEFAULT_CINEMATIC_INTRO_DURATION_SECONDS,
         cinematic_transitions: bool = False,
+        television_overlay_effects: bool = False,
         preserve_speaker: bool = False,
         diarization_speaker_count: int | None = None,
         diarization_min_speakers: int | None = None,
@@ -196,6 +206,7 @@ class VideoGenerationPipeline:
             "cinematic_intro": cinematic_intro,
             "cinematic_intro_duration": cinematic_intro_duration,
             "cinematic_transitions": cinematic_transitions,
+            "television_overlay_effects": television_overlay_effects,
             "video_prompt": video_prompt,
         }
         self._write_manifest(run_dir, manifest)
@@ -262,9 +273,239 @@ class VideoGenerationPipeline:
             cinematic_intro=cinematic_intro,
             cinematic_intro_duration=cinematic_intro_duration,
             cinematic_transitions=cinematic_transitions,
+            television_overlay_effects=television_overlay_effects,
             image_workers=image_workers,
             images_per_scene=images_per_scene,
             view_preclassification=view_preclassification,
+        )
+
+    def rebuild_video_from_run(
+        self,
+        *,
+        run_dir: Path,
+        output_path: Path | None = None,
+        audio_path: Path | None = None,
+        cinematic_intro_enabled: bool | None = None,
+        cinematic_intro_duration: float | None = None,
+        cinematic_transitions: bool | None = None,
+        television_overlay_effects: bool | None = None,
+        reuse_visual_assets: bool = True,
+    ) -> Path:
+        """Rebuild the final video using an existing run directory.
+
+        This skips transcription, planning, and image generation by reusing
+        `manifest.json`, generated images, and existing audio artifacts.
+        """
+
+        self._ensure_video_dependencies()
+        resolved_run_dir = run_dir.expanduser().resolve()
+        if not resolved_run_dir.exists() or not resolved_run_dir.is_dir():
+            raise ValueError(f"Run directory does not exist: {resolved_run_dir}")
+
+        manifest_path = resolved_run_dir / "manifest.json"
+        if not manifest_path.exists():
+            raise ValueError(f"Run directory is missing manifest.json: {manifest_path}")
+
+        manifest_raw = manifest_path.read_text(encoding="utf-8")
+        try:
+            manifest: dict[str, object] = json.loads(manifest_raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Invalid manifest JSON at {manifest_path}: {exc}"
+            ) from exc
+
+        resolved_audio_path = (
+            audio_path.expanduser().resolve()
+            if audio_path is not None
+            else self._resolve_manifest_audio_path(
+                run_dir=resolved_run_dir, manifest=manifest
+            )
+        )
+        if not resolved_audio_path.exists():
+            raise ValueError(f"Audio file does not exist: {resolved_audio_path}")
+
+        resolved_output_path = self._resolve_manifest_output_path(
+            run_dir=resolved_run_dir, manifest=manifest, output_path=output_path
+        )
+
+        manifest_intro = manifest.get("cinematic_intro")
+        intro_enabled_default = False
+        intro_title = ""
+        intro_description = ""
+        intro_duration_default = self._DEFAULT_CINEMATIC_INTRO_DURATION_SECONDS
+        if isinstance(manifest_intro, dict):
+            intro_enabled_default = bool(manifest_intro.get("enabled", False))
+            intro_title = str(manifest_intro.get("title", "")).strip()
+            intro_description = str(manifest_intro.get("description", "")).strip()
+            intro_duration_default = max(
+                2.0,
+                self._coerce_float(
+                    manifest_intro.get("duration_seconds"),
+                    self._DEFAULT_CINEMATIC_INTRO_DURATION_SECONDS,
+                ),
+            )
+
+        resolved_intro_enabled = (
+            intro_enabled_default
+            if cinematic_intro_enabled is None
+            else cinematic_intro_enabled
+        )
+        resolved_intro_duration = (
+            intro_duration_default
+            if cinematic_intro_duration is None
+            else max(2.0, float(cinematic_intro_duration))
+        )
+        resolved_transitions = (
+            bool(manifest.get("cinematic_transitions", False))
+            if cinematic_transitions is None
+            else cinematic_transitions
+        )
+        resolved_tv_effects = (
+            bool(manifest.get("television_overlay_effects", False))
+            if television_overlay_effects is None
+            else television_overlay_effects
+        )
+        default_transitions = bool(manifest.get("cinematic_transitions", False))
+        default_tv_effects = bool(manifest.get("television_overlay_effects", False))
+
+        intro_card: CinematicIntroCard | None = None
+        if resolved_intro_enabled:
+            title = intro_title or "Recovered Intro"
+            description = (
+                intro_description
+                or "Recovered cinematic intro from existing run metadata."
+            )
+            intro_card = CinematicIntroCard(
+                title=title,
+                description=description,
+                duration_seconds=resolved_intro_duration,
+            )
+
+        manifest["status"] = "rebuilding_video"
+        manifest["run_dir"] = str(resolved_run_dir)
+        manifest["audio"] = str(resolved_audio_path)
+        manifest["output"] = str(resolved_output_path)
+        manifest["cinematic_transitions"] = resolved_transitions
+        manifest["television_overlay_effects"] = resolved_tv_effects
+        manifest["cinematic_intro"] = (
+            {
+                "enabled": True,
+                "title": intro_card.title,
+                "description": intro_card.description,
+                "duration_seconds": intro_card.duration_seconds,
+            }
+            if intro_card is not None
+            else {"enabled": False}
+        )
+        self._write_manifest(resolved_run_dir, manifest)
+
+        visual_asset_reuse_allowed = (
+            reuse_visual_assets
+            and resolved_intro_enabled == intro_enabled_default
+            and resolved_transitions == default_transitions
+            and resolved_tv_effects == default_tv_effects
+        )
+        if resolved_intro_enabled:
+            visual_asset_reuse_allowed = visual_asset_reuse_allowed and (
+                abs(resolved_intro_duration - intro_duration_default) < 0.01
+            )
+
+        reusable_visual_path = (
+            self._resolve_reusable_visual_path(
+                run_dir=resolved_run_dir,
+                intro_enabled=resolved_intro_enabled,
+                television_overlay_effects=resolved_tv_effects,
+            )
+            if visual_asset_reuse_allowed
+            else None
+        )
+
+        if reusable_visual_path is not None:
+            if self._media.probe_media_file(reusable_visual_path):
+                self._status(
+                    "♻️ Reusing existing stitched visuals to skip scene re-render"
+                )
+                final_path = self._media.mux_visual_with_audio(
+                    visual_path=reusable_visual_path,
+                    audio_path=resolved_audio_path,
+                    output_path=resolved_output_path,
+                    intro_delay_seconds=(
+                        intro_card.duration_seconds if intro_card is not None else 0.0
+                    ),
+                )
+            else:
+                self._status(
+                    "⚠️ Existing stitched visual is unreadable; falling back to full rebuild"
+                )
+                final_path = self._render_rebuild_from_images(
+                    run_dir=resolved_run_dir,
+                    manifest=manifest,
+                    audio_path=resolved_audio_path,
+                    output_path=resolved_output_path,
+                    intro_card=intro_card,
+                    cinematic_transitions=resolved_transitions,
+                    television_overlay_effects=resolved_tv_effects,
+                )
+        else:
+            final_path = self._render_rebuild_from_images(
+                run_dir=resolved_run_dir,
+                manifest=manifest,
+                audio_path=resolved_audio_path,
+                output_path=resolved_output_path,
+                intro_card=intro_card,
+                cinematic_transitions=resolved_transitions,
+                television_overlay_effects=resolved_tv_effects,
+            )
+
+        manifest["status"] = "complete"
+        manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
+        self._write_manifest(resolved_run_dir, manifest)
+        self._status("✅ Video rebuild complete")
+        return final_path
+
+    def _resolve_reusable_visual_path(
+        self, *, run_dir: Path, intro_enabled: bool, television_overlay_effects: bool
+    ) -> Path | None:
+        if television_overlay_effects:
+            candidate = run_dir / "stitched_tv_effects.mp4"
+            if not candidate.exists():
+                return None
+            if intro_enabled and not (run_dir / "stitched_with_intro.mp4").exists():
+                return None
+            return candidate
+
+        if intro_enabled:
+            candidate = run_dir / "stitched_with_intro.mp4"
+            return candidate if candidate.exists() else None
+
+        candidate = run_dir / "stitched.mp4"
+        return candidate if candidate.exists() else None
+
+    def _render_rebuild_from_images(
+        self,
+        *,
+        run_dir: Path,
+        manifest: dict[str, object],
+        audio_path: Path,
+        output_path: Path,
+        intro_card: CinematicIntroCard | None,
+        cinematic_transitions: bool,
+        television_overlay_effects: bool,
+    ) -> Path:
+        self._status("🎬 Rebuilding final video from existing run assets")
+        scenes = self._load_scenes_from_manifest(manifest)
+        scene_image_sequences = self._load_scene_images_from_manifest(
+            run_dir=run_dir, manifest=manifest, scenes=scenes
+        )
+        return self._media.render_video(
+            images=scene_image_sequences,
+            scenes=scenes,
+            audio_path=audio_path,
+            output_path=output_path,
+            work_dir=run_dir,
+            cinematic_intro=intro_card,
+            cinematic_transitions=cinematic_transitions,
+            television_overlay_effects=television_overlay_effects,
         )
 
     def transcribe_audio_file(
@@ -842,6 +1083,7 @@ class VideoGenerationPipeline:
         cinematic_intro: bool = False,
         cinematic_intro_duration: float = _DEFAULT_CINEMATIC_INTRO_DURATION_SECONDS,
         cinematic_transitions: bool = False,
+        television_overlay_effects: bool = False,
         image_workers: int = 1,
         images_per_scene: int = 1,
         view_preclassification: bool = False,
@@ -863,6 +1105,7 @@ class VideoGenerationPipeline:
             narration_text=narration_text,
             video_prompt=video_prompt,
             generate_video_prompt=generate_video_prompt,
+            duration_seconds=duration_seconds,
         )
         resolved_video_prompt = video_prompt_plan.video_prompt
         manifest["video_prompt"] = resolved_video_prompt
@@ -940,6 +1183,22 @@ class VideoGenerationPipeline:
                         }
                     }
                     if video_prompt_plan.preclassification.conversation_insights
+                    is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "communication_metrics": {
+                            "profanity_word_count": video_prompt_plan.preclassification.communication_metrics.profanity_word_count,
+                            "profanity_rate": video_prompt_plan.preclassification.communication_metrics.profanity_rate,
+                            "words_per_minute": video_prompt_plan.preclassification.communication_metrics.words_per_minute,
+                            "average_words_per_sentence": video_prompt_plan.preclassification.communication_metrics.average_words_per_sentence,
+                            "communication_capability_score": video_prompt_plan.preclassification.communication_metrics.communication_capability_score,
+                            "communication_capability_label": video_prompt_plan.preclassification.communication_metrics.communication_capability_label,
+                            "communication_notes": video_prompt_plan.preclassification.communication_metrics.communication_notes,
+                        }
+                    }
+                    if video_prompt_plan.preclassification.communication_metrics
                     is not None
                     else {}
                 ),
@@ -1174,6 +1433,7 @@ class VideoGenerationPipeline:
             }
         else:
             manifest["cinematic_intro"] = {"enabled": False}
+        manifest["television_overlay_effects"] = television_overlay_effects
         self._write_manifest(run_dir, manifest)
         self._status("🎬 Assembling video with ffmpeg")
         final_path = self._media.render_video(
@@ -1184,6 +1444,7 @@ class VideoGenerationPipeline:
             work_dir=run_dir,
             cinematic_intro=intro_card,
             cinematic_transitions=cinematic_transitions,
+            television_overlay_effects=television_overlay_effects,
         )
         manifest["output"] = str(final_path)
         manifest["audio"] = str(audio_path)
@@ -1340,6 +1601,7 @@ class VideoGenerationPipeline:
         narration_text: str,
         video_prompt: str | None,
         generate_video_prompt: bool,
+        duration_seconds: float | None = None,
     ) -> VideoPromptPlan:
         if video_prompt:
             return VideoPromptPlan(video_prompt=video_prompt, preclassification=None)
@@ -1347,7 +1609,7 @@ class VideoGenerationPipeline:
             self._status("🧪 Preclassifying transcript for visual planning")
             self._status("🪄 Generating video prompt from narration")
             return self._planner.generate_video_prompt_plan(
-                narration_text=narration_text
+                narration_text=narration_text, duration_seconds=duration_seconds
             )
         raise ValueError(
             "video_prompt is required unless generate_video_prompt is enabled"
@@ -1935,6 +2197,131 @@ class VideoGenerationPipeline:
         (run_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2), encoding="utf-8"
         )
+
+    def _load_scenes_from_manifest(self, manifest: dict[str, object]) -> list[Scene]:
+        raw_scenes = manifest.get("scenes")
+        if not isinstance(raw_scenes, list) or not raw_scenes:
+            raise ValueError("Manifest is missing scene metadata")
+
+        scenes: list[Scene] = []
+        for item in raw_scenes:
+            if not isinstance(item, dict):
+                raise ValueError("Manifest contains invalid scene entry")
+
+            transition: CinematicTransition | None = None
+            raw_transition = item.get("transition_to_next")
+            if isinstance(raw_transition, dict):
+                transition = CinematicTransition(
+                    transition_type=str(
+                        raw_transition.get("transition_type", "dissolve")
+                    ),
+                    duration_frames=max(
+                        1,
+                        int(
+                            self._coerce_float(
+                                raw_transition.get("duration_frames"), 12
+                            )
+                        ),
+                    ),
+                    intensity=str(raw_transition.get("intensity", "subtle")),
+                    visual_cue=str(raw_transition.get("visual_cue", "")),
+                    semantic_bridge=str(raw_transition.get("semantic_bridge", "")),
+                )
+
+            scenes.append(
+                Scene(
+                    index=int(self._coerce_float(item.get("index"), 0)),
+                    prompt=str(item.get("prompt", "")).strip() or "Recovered scene",
+                    duration_seconds=max(
+                        1.0 / max(1, self._config.fps),
+                        self._coerce_float(item.get("duration_seconds"), 1.0),
+                    ),
+                    transition_to_next=transition,
+                )
+            )
+
+        scenes.sort(key=lambda scene: scene.index)
+        if any(scene.index <= 0 for scene in scenes):
+            raise ValueError("Manifest scene indexes must be positive integers")
+        return scenes
+
+    def _load_scene_images_from_manifest(
+        self, *, run_dir: Path, manifest: dict[str, object], scenes: list[Scene]
+    ) -> list[list[Path]]:
+        scene_paths: dict[int, list[Path]] = {}
+
+        raw_images = manifest.get("images")
+        if isinstance(raw_images, list) and raw_images:
+            for value in raw_images:
+                if not isinstance(value, str):
+                    continue
+                candidate = self._resolve_manifest_path(run_dir=run_dir, raw_path=value)
+                if not candidate.exists():
+                    continue
+                scene_index = self._extract_scene_index(candidate)
+                if scene_index is None:
+                    continue
+                scene_paths.setdefault(scene_index, []).append(candidate)
+
+        for scene in scenes:
+            if scene.index in scene_paths:
+                continue
+            fallback = sorted(
+                (run_dir / "images").glob(f"scene_{scene.index:02d}_frame_*.png")
+            )
+            if fallback:
+                scene_paths[scene.index] = fallback
+
+        scene_image_sequences: list[list[Path]] = []
+        for scene in scenes:
+            image_paths = scene_paths.get(scene.index)
+            if not image_paths:
+                raise ValueError(
+                    f"No scene images found for scene {scene.index} in run directory"
+                )
+            ordered_paths = sorted(image_paths, key=self._extract_frame_index)
+            scene_image_sequences.append(ordered_paths)
+        return scene_image_sequences
+
+    @staticmethod
+    def _resolve_manifest_path(*, run_dir: Path, raw_path: str) -> Path:
+        candidate = Path(raw_path).expanduser()
+        if candidate.is_absolute():
+            return candidate.resolve()
+        return (run_dir / candidate).resolve()
+
+    def _resolve_manifest_audio_path(
+        self, *, run_dir: Path, manifest: dict[str, object]
+    ) -> Path:
+        audio_value = manifest.get("audio")
+        if not isinstance(audio_value, str) or not audio_value.strip():
+            raise ValueError("Manifest is missing audio path")
+        return self._resolve_manifest_path(run_dir=run_dir, raw_path=audio_value)
+
+    def _resolve_manifest_output_path(
+        self, *, run_dir: Path, manifest: dict[str, object], output_path: Path | None
+    ) -> Path:
+        if output_path is not None:
+            return output_path.expanduser().resolve()
+
+        output_value = manifest.get("output")
+        if isinstance(output_value, str) and output_value.strip():
+            return self._resolve_manifest_path(run_dir=run_dir, raw_path=output_value)
+        raise ValueError("Output path is required when manifest has no output field")
+
+    @staticmethod
+    def _extract_scene_index(path: Path) -> int | None:
+        match = re.search(r"scene_(\d+)", path.name)
+        if match is None:
+            return None
+        return int(match.group(1))
+
+    @staticmethod
+    def _extract_frame_index(path: Path) -> int:
+        match = re.search(r"frame_(\d+)", path.name)
+        if match is None:
+            return 0
+        return int(match.group(1))
 
     def _status(self, message: str) -> None:
         if self._status_callback is not None:

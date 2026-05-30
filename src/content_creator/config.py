@@ -9,7 +9,9 @@ DEFAULT_IMAGE_NEGATIVE_PROMPT = (
     "blurry, lowres, low detail, soft focus, bad anatomy, bad hands, extra fingers, "
     "missing fingers, extra limbs, duplicate subjects, deformed face, cross-eyed, "
     "text, subtitles, watermark, logo, border, frame, photorealistic, live action, "
-    "flat lighting, muddy colors"
+    "flat lighting, muddy colors, jpeg artifacts, compression artifacts, noise, "
+    "grainy, overexposed, underexposed, washed out, oversaturated, dull, muted, "
+    "out of focus, motion blur, poorly drawn, amateur, sketch, rough lines"
 )
 
 DEFAULT_IMAGE_COMPOSITION_MODE = "balanced"
@@ -142,24 +144,24 @@ class AppConfig:
             ] = {
                 "balanced": (
                     LLMInferenceConfig(max_tokens=900, temperature=0.6, top_p=1.0),
-                    ImageInferenceConfig(),
+                    ImageInferenceConfig(num_inference_steps=28, guidance_scale=3.5),
                     SafetyInferenceConfig(),
                 ),
                 "cinematic": (
                     LLMInferenceConfig(max_tokens=1100, temperature=0.45, top_p=0.9),
-                    ImageInferenceConfig(num_inference_steps=40, guidance_scale=6.5),
+                    ImageInferenceConfig(num_inference_steps=50, guidance_scale=3.5),
                     SafetyInferenceConfig(top_k=5),
                 ),
                 "consistent": (
                     LLMInferenceConfig(max_tokens=950, temperature=0.35, top_p=0.85),
                     ImageInferenceConfig(
-                        num_inference_steps=45, guidance_scale=7.0, seed=42
+                        num_inference_steps=50, guidance_scale=3.5, seed=42
                     ),
                     SafetyInferenceConfig(top_k=5),
                 ),
                 "fast": (
                     LLMInferenceConfig(max_tokens=700, temperature=0.7, top_p=1.0),
-                    ImageInferenceConfig(num_inference_steps=24, guidance_scale=5.5),
+                    ImageInferenceConfig(num_inference_steps=20, guidance_scale=3.5),
                     SafetyInferenceConfig(top_k=3),
                 ),
             }

@@ -4,6 +4,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -35,6 +36,7 @@ class VideoPromptPreclassification:
     truthfulness_assessment: "TranscriptAssessment"
     interaction_style_assessment: "InteractionStyleAssessment"
     conversation_insights: "ConversationInsights | None" = None
+    communication_metrics: "CommunicationMetrics | None" = None
     ensemble_scorecard: "PreclassificationEnsembleScorecard | None" = None
 
 
@@ -90,6 +92,17 @@ class ConversationInsights:
     decision_signal: TranscriptAssessment
     conflict_level: TranscriptAssessment
     concise_summary: str
+
+
+@dataclass(slots=True)
+class CommunicationMetrics:
+    profanity_word_count: int
+    profanity_rate: float
+    words_per_minute: float | None
+    average_words_per_sentence: float
+    communication_capability_score: float
+    communication_capability_label: str
+    communication_notes: str
 
 
 @dataclass(slots=True)
@@ -185,13 +198,16 @@ class ScenePlanner:
         self._safety_secondary_model = (
             safety_secondary_model or "unitary/unbiased-toxic-roberta"
         )
+        self._profanity_terms = self._load_profanity_terms()
 
     def generate_video_prompt(self, *, narration_text: str) -> str:
         return self.generate_video_prompt_plan(
             narration_text=narration_text
         ).video_prompt
 
-    def generate_video_prompt_plan(self, *, narration_text: str) -> VideoPromptPlan:
+    def generate_video_prompt_plan(
+        self, *, narration_text: str, duration_seconds: float | None = None
+    ) -> VideoPromptPlan:
         video_prompt_prompt = self._build_video_prompt_prompt(
             narration_text=narration_text
         )
@@ -222,6 +238,12 @@ class ScenePlanner:
             truthfulness_assessment=truthfulness_assessment,
             interaction_style_assessment=interaction_style_assessment,
             conversation_insights=conversation_insights,
+            communication_metrics=self._build_communication_metrics(
+                narration_text=narration_text,
+                duration_seconds=duration_seconds,
+                interaction_style_assessment=interaction_style_assessment,
+                conversation_insights=conversation_insights,
+            ),
             ensemble_scorecard=self._build_ensemble_scorecard(
                 narration_text=narration_text,
                 mood=mood,
@@ -620,7 +642,7 @@ Constraints:
 - video_prompt must describe recurring protagonist, environment, mood, lighting, palette, and stylized composition.
 - video_prompt should prefer still-image composition language: {self._COMPOSITION_GUIDANCE}.
 - If motion or impact is important, phrase it as {self._MOTION_GUIDANCE}.
-- video_prompt must be one sentence and under 110 words.
+- video_prompt must be one sentence and under 150 words.
 - DO NOT use text overlays, subtitles, logos, or watermarks.
 
 Narration or transcript:
@@ -1251,6 +1273,115 @@ Transcript:
             return "expressive"
         return "vivid"
 
+    def _load_profanity_terms(self) -> set[str]:
+        default_file = Path(__file__).resolve().parent / "data" / "profanity_words.txt"
+        try:
+            lines = default_file.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return set()
+        terms: set[str] = set()
+        for line in lines:
+            cleaned = line.strip().lower()
+            if not cleaned or cleaned.startswith("#"):
+                continue
+            terms.add(cleaned)
+        return terms
+
+    def _count_profanity_words(self, text: str) -> int:
+        if not text.strip() or not self._profanity_terms:
+            return 0
+        tokens = [token.lower() for token in re.findall(r"\b\w+\b", text)]
+        return sum(1 for token in tokens if token in self._profanity_terms)
+
+    def _communication_capability(
+        self,
+        *,
+        interaction_style_assessment: InteractionStyleAssessment,
+        conversation_insights: ConversationInsights,
+    ) -> tuple[float, str, str]:
+        score = 0.5
+
+        formality_bonus = {"Formal": 0.12, "Mixed": 0.07, "Informal": 0.03}.get(
+            interaction_style_assessment.formality.label, 0.05
+        )
+
+        certainty_bonus = {
+            "Confident": 0.1,
+            "Balanced": 0.08,
+            "HeavilyHedged": 0.03,
+        }.get(interaction_style_assessment.certainty_hedging.label, 0.05)
+
+        conflict_penalty = {"Low": -0.02, "Medium": -0.07, "High": -0.14}.get(
+            conversation_insights.conflict_level.label, -0.05
+        )
+
+        dynamic_bonus = {
+            "Collaborative": 0.12,
+            "Informational": 0.08,
+            "Mixed": 0.05,
+            "Adversarial": -0.08,
+            "Unknown": 0.0,
+        }.get(conversation_insights.participant_dynamic.label, 0.0)
+
+        score = (
+            score + formality_bonus + certainty_bonus + conflict_penalty + dynamic_bonus
+        )
+        score = max(0.0, min(1.0, round(score, 3)))
+
+        if score >= 0.78:
+            return (
+                score,
+                "High",
+                "Clear and effective communication with strong collaborative signals.",
+            )
+        if score >= 0.55:
+            return (
+                score,
+                "Moderate",
+                "Mostly effective communication with room for more clarity or alignment.",
+            )
+        return (
+            score,
+            "NeedsImprovement",
+            "Communication may be hindered by conflict, low clarity, or weak participant alignment.",
+        )
+
+    def _build_communication_metrics(
+        self,
+        *,
+        narration_text: str,
+        duration_seconds: float | None,
+        interaction_style_assessment: InteractionStyleAssessment,
+        conversation_insights: ConversationInsights,
+    ) -> CommunicationMetrics:
+        word_count = self._count_words(narration_text)
+        sentence_count = max(1, self._count_sentences(narration_text))
+        profanity_word_count = self._count_profanity_words(narration_text)
+        profanity_rate = (
+            round((profanity_word_count / word_count), 4) if word_count > 0 else 0.0
+        )
+        avg_words_per_sentence = (
+            round(word_count / sentence_count, 2) if sentence_count > 0 else 0.0
+        )
+        words_per_minute = None
+        if duration_seconds is not None and duration_seconds > 0:
+            words_per_minute = round((word_count / duration_seconds) * 60.0, 1)
+
+        capability_score, capability_label, notes = self._communication_capability(
+            interaction_style_assessment=interaction_style_assessment,
+            conversation_insights=conversation_insights,
+        )
+
+        return CommunicationMetrics(
+            profanity_word_count=profanity_word_count,
+            profanity_rate=profanity_rate,
+            words_per_minute=words_per_minute,
+            average_words_per_sentence=avg_words_per_sentence,
+            communication_capability_score=capability_score,
+            communication_capability_label=capability_label,
+            communication_notes=notes,
+        )
+
     def _count_words(self, text: str) -> int:
         return len(re.findall(r"\b\w+\b", text))
 
@@ -1295,7 +1426,8 @@ Transcript:
         if not normalized:
             return (
                 "Cartoon style illustrated fantasy scene in an 80s/90s retro anime style, "
-                "with vibrant colors, cel shading, detailed illustration, sharp linework, "
+                "masterpiece, best quality, ultra-detailed, vibrant colors, cel shading, "
+                "highly detailed illustration, sharp linework, "
                 "dramatic composition, expressive characters, low-angle hero framing, subtle motion energy, "
                 "and Studio Ghibli and Makoto Shinkai-inspired artistry"
             )
@@ -1319,8 +1451,9 @@ Transcript:
             return normalized
 
         style_suffix = (
-            "80s/90s retro anime style, vibrant colors, cel shading, detailed "
-            "illustration, sharp linework, dramatic composition, expressive characters, "
+            "80s/90s retro anime style, masterpiece, best quality, ultra-detailed, "
+            "vibrant colors, cel shading, highly detailed illustration, sharp linework, "
+            "dramatic composition, expressive characters, "
             "low-angle hero framing, dynamic diagonal layout, subtle motion energy, "
             "Studio Ghibli and Makoto Shinkai-inspired artistry"
         )

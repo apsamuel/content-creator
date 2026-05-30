@@ -8,6 +8,7 @@ import pytest
 
 from content_creator.config import AppConfig, ModelConfig
 from content_creator.planner import (
+    CommunicationMetrics,
     ConversationInsights,
     InteractionStyleAssessment,
     Scene,
@@ -117,7 +118,9 @@ class FakePlanner:
         self.generated_video_prompt_plan_inputs: list[str] = []
         self.prepared_image_prompts: list[tuple[str, int, int | None]] = []
 
-    def generate_video_prompt_plan(self, *, narration_text: str) -> VideoPromptPlan:
+    def generate_video_prompt_plan(
+        self, *, narration_text: str, duration_seconds: float | None = None
+    ) -> VideoPromptPlan:
         self.generated_video_prompt_plan_inputs.append(narration_text)
         return VideoPromptPlan(
             video_prompt="Generated visual direction",
@@ -189,6 +192,20 @@ class FakePlanner:
                     ),
                     concise_summary="A collaborative planning conversation with low conflict and an emerging, but not finalized, decision.",
                 ),
+                communication_metrics=CommunicationMetrics(
+                    profanity_word_count=0,
+                    profanity_rate=0.0,
+                    words_per_minute=(
+                        round((12 / duration_seconds) * 60.0, 1)
+                        if isinstance(duration_seconds, (int, float))
+                        and duration_seconds > 0
+                        else None
+                    ),
+                    average_words_per_sentence=6.0,
+                    communication_capability_score=0.81,
+                    communication_capability_label="High",
+                    communication_notes="Clear and effective communication with strong collaborative signals.",
+                ),
             ),
         )
 
@@ -250,6 +267,11 @@ class FakeMedia:
         self.fps = fps
         self.last_cinematic_intro = None
         self.last_cinematic_transitions = False
+        self.last_television_overlay_effects = False
+        self.render_calls = 0
+        self.mux_calls = 0
+        self.last_mux_visual_path: Path | None = None
+        self.last_mux_intro_delay_seconds = 0.0
 
     def get_audio_duration(self, audio_path: Path) -> float:
         return 5.0
@@ -274,12 +296,33 @@ class FakeMedia:
         work_dir: Path,
         cinematic_intro=None,
         cinematic_transitions: bool = False,
+        television_overlay_effects: bool = False,
     ) -> Path:
+        self.render_calls += 1
         self.last_cinematic_intro = cinematic_intro
         self.last_cinematic_transitions = cinematic_transitions
+        self.last_television_overlay_effects = television_overlay_effects
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"video")
         return output_path
+
+    def mux_visual_with_audio(
+        self,
+        *,
+        visual_path: Path,
+        audio_path: Path,
+        output_path: Path,
+        intro_delay_seconds: float = 0.0,
+    ) -> Path:
+        self.mux_calls += 1
+        self.last_mux_visual_path = visual_path
+        self.last_mux_intro_delay_seconds = intro_delay_seconds
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"video")
+        return output_path
+
+    def probe_media_file(self, media_path: Path) -> bool:
+        return media_path.exists()
 
     def overlay_sound_effects(
         self, *, audio_path: Path, output_path: Path, events, duck_db: float
@@ -612,6 +655,15 @@ def test_generate_from_text_can_generate_video_prompt(
             },
             "concise_summary": "A collaborative planning conversation with low conflict and an emerging, but not finalized, decision.",
         },
+        "communication_metrics": {
+            "profanity_word_count": 0,
+            "profanity_rate": 0.0,
+            "words_per_minute": 144.0,
+            "average_words_per_sentence": 6.0,
+            "communication_capability_score": 0.81,
+            "communication_capability_label": "High",
+            "communication_notes": "Clear and effective communication with strong collaborative signals.",
+        },
     }
 
 
@@ -700,6 +752,261 @@ def test_generate_from_text_enables_cinematic_transitions_when_requested(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["cinematic_transitions"] is True
     assert pipeline._media.last_cinematic_transitions is True
+
+
+def test_generate_from_text_enables_television_overlay_effects_when_requested(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    pipeline = VideoGenerationPipeline(_config(tmp_path))
+    output_path = tmp_path / "out" / "television-overlay-effects.mp4"
+
+    pipeline.generate_from_text(
+        narration_text="Narration text",
+        video_prompt="Video direction",
+        output_path=output_path,
+        television_overlay_effects=True,
+    )
+
+    manifest_path = _config(tmp_path).work_dir / output_path.stem / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["television_overlay_effects"] is True
+    assert pipeline._media.last_television_overlay_effects is True
+
+
+def test_rebuild_video_from_run_reuses_existing_assets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    pipeline = VideoGenerationPipeline(_config(tmp_path))
+    run_dir = _config(tmp_path).work_dir / "existing-run"
+    images_dir = run_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    image_1 = images_dir / "scene_01_frame_01.png"
+    image_2 = images_dir / "scene_02_frame_01.png"
+    image_1.write_bytes(b"img1")
+    image_2.write_bytes(b"img2")
+
+    audio_path = run_dir / "audio_censored.m4a"
+    audio_path.write_bytes(b"audio")
+    stitched_with_intro = run_dir / "stitched_with_intro.mp4"
+    stitched_with_intro.write_bytes(b"video")
+    output_path = tmp_path / "out" / "rebuilt.mp4"
+
+    manifest = {
+        "audio": str(audio_path),
+        "output": str(output_path),
+        "cinematic_transitions": True,
+        "television_overlay_effects": False,
+        "cinematic_intro": {
+            "enabled": True,
+            "title": "Recovered Title",
+            "description": "Recovered Description",
+            "duration_seconds": 6.1,
+        },
+        "scenes": [
+            {"index": 1, "prompt": "Scene one", "duration_seconds": 2.5},
+            {"index": 2, "prompt": "Scene two", "duration_seconds": 2.5},
+        ],
+        "images": [str(image_1), str(image_2)],
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = pipeline.rebuild_video_from_run(run_dir=run_dir, output_path=output_path)
+
+    assert result == output_path.resolve()
+    assert output_path.exists()
+    assert pipeline._media.render_calls == 0
+    assert pipeline._media.mux_calls == 1
+    assert pipeline._media.last_mux_visual_path == stitched_with_intro
+    assert pipeline._media.last_mux_intro_delay_seconds == pytest.approx(6.1)
+
+    updated_manifest = json.loads(
+        (run_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert updated_manifest["status"] == "complete"
+    assert updated_manifest["output"] == str(output_path.resolve())
+
+
+def test_rebuild_video_from_run_accepts_feature_overrides(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    pipeline = VideoGenerationPipeline(_config(tmp_path))
+    run_dir = _config(tmp_path).work_dir / "existing-run-2"
+    images_dir = run_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    (images_dir / "scene_01_frame_01.png").write_bytes(b"img1")
+    (images_dir / "scene_02_frame_01.png").write_bytes(b"img2")
+    audio_path = run_dir / "audio_censored.m4a"
+    audio_path.write_bytes(b"audio")
+    (run_dir / "stitched_with_intro.mp4").write_bytes(b"video")
+    (run_dir / "stitched_tv_effects.mp4").write_bytes(b"video")
+    output_path = tmp_path / "out" / "rebuilt-overrides.mp4"
+
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "audio": str(audio_path),
+                "output": str(output_path),
+                "cinematic_transitions": False,
+                "television_overlay_effects": False,
+                "cinematic_intro": {
+                    "enabled": True,
+                    "title": "Old",
+                    "description": "Old description",
+                    "duration_seconds": 5.8,
+                },
+                "scenes": [
+                    {"index": 1, "prompt": "Scene one", "duration_seconds": 2.5},
+                    {"index": 2, "prompt": "Scene two", "duration_seconds": 2.5},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    pipeline.rebuild_video_from_run(
+        run_dir=run_dir,
+        output_path=output_path,
+        cinematic_intro_enabled=False,
+        cinematic_transitions=True,
+        television_overlay_effects=True,
+    )
+
+    assert pipeline._media.last_cinematic_intro is None
+    assert pipeline._media.last_cinematic_transitions is True
+    assert pipeline._media.last_television_overlay_effects is True
+    assert pipeline._media.render_calls == 1
+    assert pipeline._media.mux_calls == 0
+
+
+def test_rebuild_video_from_run_falls_back_when_reused_visual_is_invalid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    pipeline = VideoGenerationPipeline(_config(tmp_path))
+    run_dir = _config(tmp_path).work_dir / "existing-run-invalid-visual"
+    images_dir = run_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    image_1 = images_dir / "scene_01_frame_01.png"
+    image_2 = images_dir / "scene_02_frame_01.png"
+    image_1.write_bytes(b"img1")
+    image_2.write_bytes(b"img2")
+
+    audio_path = run_dir / "audio_censored.m4a"
+    audio_path.write_bytes(b"audio")
+    (run_dir / "stitched_with_intro.mp4").write_bytes(b"video")
+    output_path = tmp_path / "out" / "rebuilt-invalid-visual.mp4"
+
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "audio": str(audio_path),
+                "output": str(output_path),
+                "cinematic_transitions": True,
+                "television_overlay_effects": False,
+                "cinematic_intro": {
+                    "enabled": True,
+                    "title": "Recovered Title",
+                    "description": "Recovered Description",
+                    "duration_seconds": 6.1,
+                },
+                "scenes": [
+                    {"index": 1, "prompt": "Scene one", "duration_seconds": 2.5},
+                    {"index": 2, "prompt": "Scene two", "duration_seconds": 2.5},
+                ],
+                "images": [str(image_1), str(image_2)],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    pipeline._media.probe_media_file = lambda _path: False
+
+    pipeline.rebuild_video_from_run(run_dir=run_dir, output_path=output_path)
+
+    assert pipeline._media.render_calls == 1
+    assert pipeline._media.mux_calls == 0
+
+
+def test_rebuild_video_from_run_can_disable_visual_asset_reuse(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    pipeline = VideoGenerationPipeline(_config(tmp_path))
+    run_dir = _config(tmp_path).work_dir / "existing-run-3"
+    images_dir = run_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    image_1 = images_dir / "scene_01_frame_01.png"
+    image_2 = images_dir / "scene_02_frame_01.png"
+    image_1.write_bytes(b"img1")
+    image_2.write_bytes(b"img2")
+
+    audio_path = run_dir / "audio_censored.m4a"
+    audio_path.write_bytes(b"audio")
+    (run_dir / "stitched_with_intro.mp4").write_bytes(b"video")
+    output_path = tmp_path / "out" / "rebuilt-no-reuse.mp4"
+
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "audio": str(audio_path),
+                "output": str(output_path),
+                "cinematic_transitions": True,
+                "television_overlay_effects": False,
+                "cinematic_intro": {
+                    "enabled": True,
+                    "title": "Recovered Title",
+                    "description": "Recovered Description",
+                    "duration_seconds": 6.1,
+                },
+                "scenes": [
+                    {"index": 1, "prompt": "Scene one", "duration_seconds": 2.5},
+                    {"index": 2, "prompt": "Scene two", "duration_seconds": 2.5},
+                ],
+                "images": [str(image_1), str(image_2)],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    pipeline.rebuild_video_from_run(
+        run_dir=run_dir, output_path=output_path, reuse_visual_assets=False
+    )
+
+    assert pipeline._media.render_calls == 1
+    assert pipeline._media.mux_calls == 0
 
 
 def test_transcribe_audio_file_falls_back_without_ffmpeg(

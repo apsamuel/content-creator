@@ -48,6 +48,27 @@ class MediaAssembler:
         payload = json.loads(result.stdout)
         return float(payload["format"]["duration"])
 
+    def probe_media_file(self, media_path: Path) -> bool:
+        try:
+            subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "json",
+                    str(media_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return True
+        except subprocess.CalledProcessError:
+            return False
+
     def chunk_audio(
         self, *, audio_path: Path, output_dir: Path, chunk_seconds: float
     ) -> list[Path]:
@@ -93,6 +114,7 @@ class MediaAssembler:
         work_dir: Path,
         cinematic_intro: CinematicIntroCard | None = None,
         cinematic_transitions: bool = False,
+        television_overlay_effects: bool = False,
     ) -> Path:
         clips_dir = work_dir / "clips"
         clips_dir.mkdir(parents=True, exist_ok=True)
@@ -161,7 +183,6 @@ class MediaAssembler:
             )
 
         final_visual_path = stitched
-        intro_delay_seconds = 0.0
         if cinematic_intro is not None:
             intro_clip = work_dir / "intro_card.mp4"
             self._render_intro_card(intro_card=cinematic_intro, output_path=intro_clip)
@@ -193,10 +214,41 @@ class MediaAssembler:
                 text=True,
             )
             final_visual_path = stitched_with_intro
-            intro_delay_seconds = max(0.0, float(cinematic_intro.duration_seconds))
 
+        if television_overlay_effects:
+            tv_effects_path = work_dir / "stitched_tv_effects.mp4"
+            self._apply_television_overlay_effects(
+                input_path=final_visual_path, output_path=tv_effects_path
+            )
+            final_visual_path = tv_effects_path
+
+        intro_delay_seconds = (
+            max(0.0, float(cinematic_intro.duration_seconds))
+            if cinematic_intro is not None
+            else 0.0
+        )
+        self.mux_visual_with_audio(
+            visual_path=final_visual_path,
+            audio_path=audio_path,
+            output_path=output_path,
+            intro_delay_seconds=intro_delay_seconds,
+        )
+        return output_path
+
+    def mux_visual_with_audio(
+        self,
+        *,
+        visual_path: Path,
+        audio_path: Path,
+        output_path: Path,
+        intro_delay_seconds: float = 0.0,
+    ) -> Path:
         audio_filter = (
-            "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,pan=stereo|c0=c0|c1=c0"
+            "highpass=f=80"
+            ",acompressor=threshold=-20dB:ratio=3:attack=5:release=50:knee=2"
+            ",loudnorm=I=-16:TP=-1.5:LRA=11"
+            ",aresample=48000"
+            ",pan=stereo|c0=c0|c1=c0"
         )
         if intro_delay_seconds > 0:
             delay_ms = int(round(intro_delay_seconds * 1000))
@@ -207,7 +259,7 @@ class MediaAssembler:
                 "ffmpeg",
                 "-y",
                 "-i",
-                str(final_visual_path),
+                str(visual_path),
                 "-i",
                 str(audio_path),
                 "-c:v",
@@ -219,7 +271,7 @@ class MediaAssembler:
                 "-profile:a",
                 "aac_low",
                 "-b:a",
-                "192k",
+                "256k",
                 "-ar",
                 "48000",
                 "-ac",
@@ -294,6 +346,67 @@ class MediaAssembler:
             ]
         )
         subprocess.run(command, check=True, capture_output=True, text=True)
+
+    def _apply_television_overlay_effects(
+        self, *, input_path: Path, output_path: Path
+    ) -> None:
+        screen_width = max(2, int(round(self._width * 0.86)))
+        screen_height = max(2, int(round(self._height * 0.74)))
+        pad_x = max(0, (self._width - screen_width) // 2)
+        pad_y = max(0, int(round(self._height * 0.11)))
+        glow_height = max(1, int(round(self._height * 0.035)))
+
+        vf = ",".join(
+            [
+                f"scale={screen_width}:{screen_height}:force_original_aspect_ratio=decrease",
+                f"pad={self._width}:{self._height}:{pad_x}:{pad_y}:color=#050505",
+                "setsar=1",
+                "eq=contrast=1.04:brightness=-0.01:saturation=0.93",
+                "drawbox=x=0:y=0:w=iw:h=ih:color=black@0.08:t=fill",
+                (
+                    "drawbox="
+                    f"x={pad_x - 28}:y={pad_y - 28}:"
+                    f"w={screen_width + 56}:h={screen_height + 56}:"
+                    "color=#1a1a1a@0.88:t=fill"
+                ),
+                (
+                    "drawbox="
+                    f"x={pad_x - 10}:y={pad_y - 10}:"
+                    f"w={screen_width + 20}:h={screen_height + 20}:"
+                    "color=#2f2f2f@0.32:t=3"
+                ),
+                (
+                    "drawbox="
+                    f"x={pad_x}:y={pad_y}:w={screen_width}:h={glow_height}:"
+                    "color=white@0.05:t=fill"
+                ),
+                "drawgrid=width=iw:height=4:thickness=1:color=black@0.08",
+                "noise=alls=2:allf=t+u",
+                "vignette=PI/4",
+                "format=yuv420p",
+            ]
+        )
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(input_path),
+                "-vf",
+                vf,
+                "-c:v",
+                "libx264",
+                "-r",
+                str(self._fps),
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                str(output_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
     def _resolve_transition_duration_seconds(self, transition: object | None) -> float:
         frames = 12
@@ -373,7 +486,7 @@ class MediaAssembler:
                 "-profile:a",
                 "aac_low",
                 "-b:a",
-                "192k",
+                "256k",
                 "-ar",
                 "48000",
                 "-ac",

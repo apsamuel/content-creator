@@ -83,16 +83,20 @@ def test_render_video_builds_concat_and_invokes_ffmpeg(
     assert len(ffmpeg_calls) == 4
     final_mux_call = ffmpeg_calls[-1]
     assert "-af" in final_mux_call
-    assert (
-        "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,pan=stereo|c0=c0|c1=c0"
-        in final_mux_call
-    )
+    filter_value = final_mux_call[final_mux_call.index("-af") + 1]
+    assert "highpass=f=80" in filter_value
+    assert "acompressor=" in filter_value
+    assert "ratio=3:attack=5" in filter_value
+    assert "ratio=3:1" not in filter_value
+    assert "loudnorm=I=-16:TP=-1.5:LRA=11" in filter_value
+    assert "aresample=48000" in filter_value
+    assert "pan=stereo" in filter_value
     assert "-ar" in final_mux_call
     assert final_mux_call[final_mux_call.index("-ar") + 1] == "48000"
     assert "-ac" in final_mux_call
     assert final_mux_call[final_mux_call.index("-ac") + 1] == "2"
     assert "-b:a" in final_mux_call
-    assert final_mux_call[final_mux_call.index("-b:a") + 1] == "192k"
+    assert final_mux_call[final_mux_call.index("-b:a") + 1] == "256k"
     assert "-profile:a" in final_mux_call
     assert final_mux_call[final_mux_call.index("-profile:a") + 1] == "aac_low"
     assert "+faststart" in final_mux_call
@@ -255,6 +259,58 @@ def test_render_video_with_cinematic_transitions_uses_xfade(
     assert "-filter_complex" in stitched_call
     filter_graph = stitched_call[stitched_call.index("-filter_complex") + 1]
     assert "xfade=transition=" in filter_graph
+
+
+def test_render_video_with_television_overlay_effects_runs_visual_pass(
+    monkeypatch, tmp_path: Path
+) -> None:
+    assembler = MediaAssembler(width=1280, height=720, fps=24)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    image1 = tmp_path / "img1.png"
+    image2 = tmp_path / "img2.png"
+    image1.write_bytes(b"x")
+    image2.write_bytes(b"y")
+
+    scenes = [
+        Scene(index=1, prompt="A", duration_seconds=1.0),
+        Scene(index=2, prompt="B", duration_seconds=1.5),
+    ]
+    audio_path = tmp_path / "audio.wav"
+    audio_path.write_bytes(b"audio")
+    output_path = tmp_path / "final-tv-effects.mp4"
+
+    calls: list[list[str]] = []
+
+    def _run(command, check, capture_output, text):
+        calls.append(command)
+        if command[0] == "ffmpeg":
+            Path(command[-1]).write_bytes(b"out")
+        return Completed(stdout="")
+
+    monkeypatch.setattr(subprocess, "run", _run)
+
+    result = assembler.render_video(
+        images=[image1, image2],
+        scenes=scenes,
+        audio_path=audio_path,
+        output_path=output_path,
+        work_dir=work_dir,
+        television_overlay_effects=True,
+    )
+
+    assert result == output_path
+    assert output_path.exists()
+
+    ffmpeg_calls = [command for command in calls if command[0] == "ffmpeg"]
+    assert len(ffmpeg_calls) == 5
+    tv_effects_call = ffmpeg_calls[-2]
+    assert "-vf" in tv_effects_call
+    vf = tv_effects_call[tv_effects_call.index("-vf") + 1]
+    assert "drawgrid=width=iw:height=4" in vf
+    assert "noise=alls=2:allf=t+u" in vf
+    assert "vignette=PI/4" in vf
 
 
 def test_chunk_audio_invokes_ffmpeg_and_returns_segments(

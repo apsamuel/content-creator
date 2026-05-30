@@ -298,6 +298,14 @@ def test_generate_video_prompt_uses_llm_text() -> None:
     assert "analysis" in plan.prompts
     assert '"has_foul_language"' in plan.prompts["video_prompt_generation"]
     assert '"truthfulness"' in plan.prompts["analysis"]
+    assert plan.preclassification.communication_metrics is not None
+    assert plan.preclassification.communication_metrics.profanity_word_count == 0
+    assert plan.preclassification.communication_metrics.profanity_rate == 0.0
+    assert plan.preclassification.communication_metrics.words_per_minute is None
+    assert (
+        plan.preclassification.communication_metrics.communication_capability_label
+        in {"High", "Moderate", "NeedsImprovement"}
+    )
 
 
 def test_generate_video_prompt_falls_back_when_llm_returns_blank() -> None:
@@ -313,6 +321,100 @@ def test_generate_video_prompt_falls_back_when_llm_returns_blank() -> None:
     )
     assert "Studio Ghibli and Makoto Shinkai-inspired artistry" in video_prompt
     assert "glowing valley at night" in video_prompt
+
+
+def test_generate_video_prompt_plan_includes_wpm_and_profanity_rate() -> None:
+    llm = StubLLM(
+        [
+            json.dumps(
+                {
+                    "mood": "Tense",
+                    "has_foul_language": "Yes",
+                    "video_prompt": "stylized cartoon courtroom argument scene",
+                }
+            ),
+            json.dumps(
+                {
+                    "truthfulness": {
+                        "label": "MixedOrUnverifiable",
+                        "confidence_score": 0.6,
+                        "reason": "Some claims are not directly verifiable from transcript context.",
+                    },
+                    "formality": {
+                        "label": "Mixed",
+                        "confidence_score": 0.7,
+                        "reason": "Blend of formal and colloquial phrasing.",
+                    },
+                    "certainty_hedging": {
+                        "label": "Balanced",
+                        "confidence_score": 0.65,
+                        "reason": "Statements are moderately confident.",
+                    },
+                    "persuasion_intent": {
+                        "label": "Moderate",
+                        "confidence_score": 0.8,
+                        "reason": "Speaker attempts to influence outcomes.",
+                    },
+                    "claim_density": {
+                        "label": "Medium",
+                        "confidence_score": 0.6,
+                        "reason": "Moderate number of assertive claims.",
+                    },
+                    "speaker_sentiment": [
+                        {
+                            "speaker": "Unknown",
+                            "sentiment": "Mixed",
+                            "confidence_score": 0.62,
+                            "reason": "Alternates between calm and confrontational tone.",
+                        }
+                    ],
+                    "conversation_insights": {
+                        "conversation_type": {
+                            "label": "Debate",
+                            "confidence_score": 0.78,
+                            "reason": "Opposing viewpoints are presented.",
+                        },
+                        "primary_goal": {
+                            "label": "Persuade",
+                            "confidence_score": 0.81,
+                            "reason": "Primary objective is to convince the listener.",
+                        },
+                        "participant_dynamic": {
+                            "label": "Mixed",
+                            "confidence_score": 0.69,
+                            "reason": "Both collaborative and adversarial moments appear.",
+                        },
+                        "decision_signal": {
+                            "label": "NoDecision",
+                            "confidence_score": 0.8,
+                            "reason": "No final decision is confirmed.",
+                        },
+                        "conflict_level": {
+                            "label": "Medium",
+                            "confidence_score": 0.74,
+                            "reason": "Noticeable disagreement without escalation.",
+                        },
+                        "concise_summary": "A persuasive debate with moderate conflict and no final decision.",
+                    },
+                }
+            ),
+        ]
+    )
+    planner = ScenePlanner(llm)
+    planner._profanity_terms = {"damn"}
+
+    plan = planner.generate_video_prompt_plan(
+        narration_text="This damn idea might work, but damn if it is easy.",
+        duration_seconds=15.0,
+    )
+
+    assert plan.preclassification is not None
+    assert plan.preclassification.communication_metrics is not None
+    metrics = plan.preclassification.communication_metrics
+    assert metrics.profanity_word_count == 2
+    assert metrics.profanity_rate == 0.1818
+    assert metrics.words_per_minute == 44.0
+    assert metrics.average_words_per_sentence == 11.0
 
 
 def test_generate_video_prompt_enforces_cartoon_style_prefix_when_missing() -> None:

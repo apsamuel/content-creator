@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 from typing import Callable
 from urllib.parse import unquote
@@ -106,6 +107,17 @@ def _run_with_debug(ctx: click.Context, operation: Callable[[], None]) -> None:
         operation()
     except click.ClickException:
         raise
+    except subprocess.CalledProcessError as exc:
+        if bool(ctx.obj.get("debug", False)):
+            raise
+        stderr_output = (exc.stderr or "").strip()
+        if stderr_output:
+            tail_lines = stderr_output.splitlines()[-20:]
+            detail = "\n".join(tail_lines)
+            raise click.ClickException(
+                f"Command failed with exit status {exc.returncode}.\n{detail}"
+            ) from exc
+        raise click.ClickException(str(exc).strip() or repr(exc)) from exc
     except Exception as exc:
         if bool(ctx.obj.get("debug", False)):
             raise
@@ -194,6 +206,17 @@ def _resolve_speaker_dominance_threshold(value: float | None) -> float:
             "(from HF_SPEAKER_DOMINANCE_THRESHOLD)"
         )
     return resolved
+
+
+def _resolve_auto_on_off(value: str, *, option_name: str) -> bool | None:
+    normalized = value.strip().lower()
+    if normalized == "auto":
+        return None
+    if normalized == "on":
+        return True
+    if normalized == "off":
+        return False
+    raise click.ClickException(f"{option_name} must be one of: auto, on, off")
 
 
 @click.group()
@@ -301,6 +324,12 @@ def cli(
     help="Enable cinematic transitions between consecutive scene sequences.",
 )
 @click.option(
+    "--television-overlay-effects/--no-television-overlay-effects",
+    default=False,
+    show_default=True,
+    help="Apply ffmpeg-generated old-television overlay effects to the stitched scene montage.",
+)
+@click.option(
     "--image-workers",
     default=None,
     show_default=False,
@@ -331,6 +360,7 @@ def from_text(
     cinematic_intro: bool,
     cinematic_intro_duration: float,
     cinematic_transitions: bool,
+    television_overlay_effects: bool,
     image_workers: int | None,
     images_per_scene: int | None,
     work_dir: str | None,
@@ -374,6 +404,7 @@ def from_text(
             cinematic_intro=cinematic_intro,
             cinematic_intro_duration=cinematic_intro_duration,
             cinematic_transitions=cinematic_transitions,
+            television_overlay_effects=television_overlay_effects,
             image_workers=resolved_image_workers,
             images_per_scene=resolved_images_per_scene,
             view_preclassification=view_preclassification,
@@ -430,6 +461,12 @@ def from_text(
     default=False,
     show_default=True,
     help="Enable cinematic transitions between consecutive scene sequences.",
+)
+@click.option(
+    "--television-overlay-effects/--no-television-overlay-effects",
+    default=False,
+    show_default=True,
+    help="Apply ffmpeg-generated old-television overlay effects to the stitched scene montage.",
 )
 @click.option(
     "--image-workers",
@@ -575,6 +612,7 @@ def from_audio(
     cinematic_intro: bool,
     cinematic_intro_duration: float,
     cinematic_transitions: bool,
+    television_overlay_effects: bool,
     image_workers: int | None,
     images_per_scene: int | None,
     chunk_seconds: float,
@@ -646,6 +684,7 @@ def from_audio(
             cinematic_intro=cinematic_intro,
             cinematic_intro_duration=cinematic_intro_duration,
             cinematic_transitions=cinematic_transitions,
+            television_overlay_effects=television_overlay_effects,
             image_workers=resolved_image_workers,
             images_per_scene=resolved_images_per_scene,
             chunk_seconds=chunk_seconds,
@@ -667,6 +706,117 @@ def from_audio(
             view_preclassification=view_preclassification,
         )
         click.echo(f"✅ Video written to {result}")
+
+    _run_with_debug(ctx, _operation)
+
+
+@cli.command("rebuild-video")
+@click.option(
+    "--run-dir",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Existing run directory that contains manifest.json and generated images.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    required=True,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Destination path for rebuilt MP4 output.",
+)
+@click.option(
+    "--audio-file",
+    required=False,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Optional replacement audio file; defaults to audio path in manifest.json.",
+)
+@click.option(
+    "--cinematic-intro",
+    default="auto",
+    show_default=True,
+    type=click.Choice(["auto", "on", "off"], case_sensitive=False),
+    help="Override cinematic intro behavior: auto uses manifest value.",
+)
+@click.option(
+    "--cinematic-intro-duration",
+    default=None,
+    show_default=False,
+    type=click.FloatRange(2.0, 20.0),
+    help="Optional cinematic intro duration override in seconds.",
+)
+@click.option(
+    "--cinematic-transitions",
+    default="auto",
+    show_default=True,
+    type=click.Choice(["auto", "on", "off"], case_sensitive=False),
+    help="Override cinematic transitions: auto uses manifest value.",
+)
+@click.option(
+    "--television-overlay-effects",
+    default="auto",
+    show_default=True,
+    type=click.Choice(["auto", "on", "off"], case_sensitive=False),
+    help="Override TV overlay effects: auto uses manifest value.",
+)
+@click.option(
+    "--work-dir",
+    default=None,
+    help="Optional pipeline work dir override (defaults to run-dir parent).",
+)
+@click.option(
+    "--reuse-visual-assets/--no-reuse-visual-assets",
+    default=True,
+    show_default=True,
+    help=(
+        "Reuse existing stitched visual artifacts in run-dir when feature settings "
+        "match manifest values. Falls back to full scene re-render when unavailable."
+    ),
+)
+@click.pass_context
+def rebuild_video(
+    ctx: click.Context,
+    run_dir: Path,
+    output_path: Path,
+    audio_file: Path | None,
+    cinematic_intro: str,
+    cinematic_intro_duration: float | None,
+    cinematic_transitions: str,
+    television_overlay_effects: str,
+    work_dir: str | None,
+    reuse_visual_assets: bool,
+) -> None:
+    """Rebuild final video from an existing run directory without regenerating scenes."""
+
+    def _operation() -> None:
+        resolved_work_dir = work_dir or str(run_dir.parent)
+        pipeline = _build_pipeline(
+            work_dir=resolved_work_dir,
+            debug=bool(ctx.obj.get("debug", False)),
+            status_callback=_make_status_callback(
+                progress_enabled=bool(ctx.obj.get("progress", True))
+            ),
+            llm_model=ctx.obj.get("llm_model"),
+            stt_model=ctx.obj.get("stt_model"),
+            tts_model=ctx.obj.get("tts_model"),
+            image_model=ctx.obj.get("image_model"),
+        )
+        result = pipeline.rebuild_video_from_run(
+            run_dir=run_dir,
+            output_path=output_path,
+            audio_path=audio_file,
+            cinematic_intro_enabled=_resolve_auto_on_off(
+                cinematic_intro, option_name="--cinematic-intro"
+            ),
+            cinematic_intro_duration=cinematic_intro_duration,
+            cinematic_transitions=_resolve_auto_on_off(
+                cinematic_transitions, option_name="--cinematic-transitions"
+            ),
+            television_overlay_effects=_resolve_auto_on_off(
+                television_overlay_effects, option_name="--television-overlay-effects"
+            ),
+            reuse_visual_assets=reuse_visual_assets,
+        )
+        click.echo(f"✅ Rebuilt video written to {result}")
 
     _run_with_debug(ctx, _operation)
 
@@ -895,8 +1045,22 @@ def transcribe(
 @click.pass_context
 def doctor(ctx: click.Context, work_dir: str | None) -> None:
     """Validate local prerequisites and show active model configuration."""
+    import shutil
 
     def _operation() -> None:
+        # Check system dependencies before attempting any API calls.
+        missing_bins = [
+            binary for binary in ("ffmpeg", "ffprobe") if shutil.which(binary) is None
+        ]
+        if missing_bins:
+            joined = ", ".join(missing_bins)
+            raise click.ClickException(
+                f"Missing required system dependencies: {joined}. "
+                "Install ffmpeg (e.g. 'brew install ffmpeg' on macOS or "
+                "'sudo apt install ffmpeg' on Debian/Ubuntu)."
+            )
+        click.echo("✅ System dependencies: ffmpeg, ffprobe")
+
         try:
             config = AppConfig.from_env(
                 work_dir=work_dir,
@@ -905,21 +1069,57 @@ def doctor(ctx: click.Context, work_dir: str | None) -> None:
                 tts_model=ctx.obj.get("tts_model"),
                 image_model=ctx.obj.get("image_model"),
             )
-            VideoGenerationPipeline(
-                config,
-                debug=bool(ctx.obj.get("debug", False)),
-                status_callback=_make_status_callback(
-                    progress_enabled=bool(ctx.obj.get("progress", True))
-                ),
-            )
         except (RuntimeError, ValueError) as exc:
             raise click.ClickException(str(exc)) from exc
+
+        click.echo("✅ HF_TOKEN present")
+        click.echo("")
+        click.echo("── Runtime configuration ──────────────────────────")
+        click.echo(f"📁 Work directory:             {config.work_dir}")
+        click.echo(f"🎛️ Tuning profile:             {config.tuning_profile}")
+        click.echo(f"🖼️ Image composition mode:     {config.image_composition_mode}")
+        click.echo(
+            f"🧩 Preclassification ensemble: "
+            f"{'enabled' if config.preclassification_ensemble_enabled else 'disabled'}"
+        )
+        click.echo("")
+        click.echo("── Models ──────────────────────────────────────────")
+        click.echo(f"🧠 LLM:                        {config.models.llm_model}")
+        click.echo(f"🎧 STT:                        {config.models.stt_model}")
+        click.echo(f"🔊 TTS:                        {config.models.tts_model}")
+        click.echo(f"🖼️ Image:                      {config.models.image_model}")
+        click.echo(f"🛡️ Safety (primary):           {config.models.safety_model}")
+        click.echo(
+            f"🛡️ Safety (secondary):         {config.models.safety_secondary_model}"
+        )
+        click.echo(f"🎙️ Diarization:                {config.models.diarization_model}")
+        click.echo(
+            f"💬 Preclassification emotion:  {config.models.preclass_emotion_model}"
+        )
+        click.echo(
+            f"🎯 Preclassification intent:   {config.models.preclass_intent_model}"
+        )
+        click.echo("")
+        click.echo("── Inference settings ──────────────────────────────")
+        click.echo(
+            f"🧠 LLM:   max_tokens={config.llm_inference.max_tokens}, "
+            f"temperature={config.llm_inference.temperature}, "
+            f"top_p={config.llm_inference.top_p}"
+        )
+        click.echo(
+            f"🖼️ Image: steps={config.image_inference.num_inference_steps}, "
+            f"guidance_scale={config.image_inference.guidance_scale}, "
+            f"seed={config.image_inference.seed}"
+        )
+        click.echo(f"🛡️ Safety top_k: {config.safety_inference.top_k}")
+        if config.image_provider:
+            click.echo("")
+            click.echo("── Image provider override ─────────────────────────")
+            click.echo(f"🌐 Provider: {config.image_provider}")
+            key_hint = "set" if config.image_provider_key else "not set"
+            click.echo(f"🔑 Provider key: {key_hint}")
+        click.echo("")
         click.echo("✅ Environment looks ready.")
-        click.echo(f"📁 Work directory: {config.work_dir}")
-        click.echo(f"🧠 LLM model: {config.models.llm_model}")
-        click.echo(f"🎧 STT model: {config.models.stt_model}")
-        click.echo(f"🔊 TTS model: {config.models.tts_model}")
-        click.echo(f"🖼️ Image model: {config.models.image_model}")
 
     _run_with_debug(ctx, _operation)
 

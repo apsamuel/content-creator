@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 from click.testing import CliRunner
 import pytest
@@ -33,6 +34,10 @@ class FakePipeline:
     def build_profanity_debug_audio(self, **kwargs):
         self.calls.append(("profanity_debug", (), kwargs))
         return 2
+
+    def rebuild_video_from_run(self, **kwargs):
+        self.calls.append(("rebuild_video", (), kwargs))
+        return kwargs["output_path"]
 
 
 def test_transcribe_command_writes_output_file(monkeypatch, tmp_path: Path) -> None:
@@ -83,6 +88,146 @@ def test_transcribe_command_writes_output_file(monkeypatch, tmp_path: Path) -> N
     assert fake_pipeline.calls[0][0] == "transcribe"
     assert fake_pipeline.calls[0][2]["chunk_seconds"] == 45.0
     assert fake_pipeline.calls[0][2]["preserve_speaker"] is False
+
+
+def test_rebuild_video_command_passes_expected_options(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    audio_file = tmp_path / "replacement.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "rebuild-video",
+            "--run-dir",
+            str(run_dir),
+            "--output",
+            str(tmp_path / "rebuilt.mp4"),
+            "--audio-file",
+            str(audio_file),
+            "--cinematic-intro",
+            "on",
+            "--cinematic-intro-duration",
+            "7.2",
+            "--cinematic-transitions",
+            "off",
+            "--television-overlay-effects",
+            "on",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "✅ Rebuilt video written to" in result.output
+    call_kwargs = fake_pipeline.calls[0][2]
+    assert fake_pipeline.calls[0][0] == "rebuild_video"
+    assert call_kwargs["run_dir"] == run_dir
+    assert call_kwargs["audio_path"] == audio_file
+    assert call_kwargs["cinematic_intro_enabled"] is True
+    assert call_kwargs["cinematic_intro_duration"] == pytest.approx(7.2)
+    assert call_kwargs["cinematic_transitions"] is False
+    assert call_kwargs["television_overlay_effects"] is True
+    assert call_kwargs["reuse_visual_assets"] is True
+
+
+def test_rebuild_video_command_auto_mode_maps_to_none(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "rebuild-video",
+            "--run-dir",
+            str(run_dir),
+            "--output",
+            str(tmp_path / "rebuilt.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    call_kwargs = fake_pipeline.calls[0][2]
+    assert call_kwargs["cinematic_intro_enabled"] is None
+    assert call_kwargs["cinematic_transitions"] is None
+    assert call_kwargs["television_overlay_effects"] is None
+    assert call_kwargs["reuse_visual_assets"] is True
+
+
+def test_rebuild_video_command_can_disable_visual_asset_reuse(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "rebuild-video",
+            "--run-dir",
+            str(run_dir),
+            "--output",
+            str(tmp_path / "rebuilt.mp4"),
+            "--no-reuse-visual-assets",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    call_kwargs = fake_pipeline.calls[0][2]
+    assert call_kwargs["reuse_visual_assets"] is False
+
+
+def test_rebuild_video_surfaces_subprocess_stderr(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    class FailingPipeline:
+        def rebuild_video_from_run(self, **_kwargs):
+            raise subprocess.CalledProcessError(
+                returncode=234,
+                cmd=["ffmpeg", "-y"],
+                stderr="[Parsed_acompressor_1] Option '1' not found\nError initializing filter 'acompressor'",
+            )
+
+    monkeypatch.setattr(
+        cli_module, "_build_pipeline", lambda **_kwargs: FailingPipeline()
+    )
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "rebuild-video",
+            "--run-dir",
+            str(run_dir),
+            "--output",
+            str(tmp_path / "rebuilt.mp4"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Command failed with exit status 234." in result.output
+    assert "Option '1' not found" in result.output
 
 
 def test_transcribe_profanity_sfx_requires_output(monkeypatch, tmp_path: Path) -> None:
@@ -1047,6 +1192,61 @@ def test_from_audio_passes_cinematic_transitions(monkeypatch, tmp_path: Path) ->
 
     assert result.exit_code == 0, result.output
     assert fake_pipeline.calls[0][2]["cinematic_transitions"] is True
+
+
+def test_from_text_passes_television_overlay_effects(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-text",
+            "--text-transcription",
+            "Narration",
+            "--video-prompt",
+            "Style",
+            "--television-overlay-effects",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["television_overlay_effects"] is True
+
+
+def test_from_audio_passes_television_overlay_effects(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-audio",
+            "--audio-file",
+            str(audio_file),
+            "--video-prompt",
+            "Style",
+            "--television-overlay-effects",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_pipeline.calls[0][2]["television_overlay_effects"] is True
 
 
 def test_from_text_passes_images_per_scene(monkeypatch, tmp_path: Path) -> None:
