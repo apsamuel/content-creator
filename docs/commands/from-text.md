@@ -52,11 +52,12 @@ The CLI loads and validates the file contents before running the pipeline.
 
 - `--image-workers` controls parallel scene image generation. If omitted, the command falls back to `HF_IMAGE_WORKERS`, then `1`.
 - `--images-per-scene` controls how many coherent image variants are generated for each scene to improve visual fluidity. If omitted, the command falls back to `HF_IMAGES_PER_SCENE`, then `1`.
+- Pre-classification metadata is always generated from narration text and stored in `manifest.json`, even when `--video-prompt` is provided.
 - `--cinematic-intro` generates a cinematic opening title card with an LLM-written witty title and short description, then starts the main narration after the intro card fades out.
 - `--cinematic-intro-duration` controls how long the intro card stays on screen when `--cinematic-intro` is enabled.
 - `--cinematic-transitions` applies ffmpeg cinematic transitions between neighboring scene sequences for stronger dramatic continuity.
 - `--television-overlay-effects` applies a procedural ffmpeg pass after scene stitching to simulate an old-television presentation using generated scanlines, vignette, noise, bezel shading, and screen padding.
-- `--view-preclassification` prints the planner's video-prompt preclassification block after LLM analysis so you can inspect mood, tone, and safety-related metadata before reviewing `manifest.json`.
+- `--view-preclassification` prints the planner's preclassification block after LLM analysis so you can inspect mood, tone, and safety-related metadata before reviewing `manifest.json`.
 
 ## Mechanism Flow
 

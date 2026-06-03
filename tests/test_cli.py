@@ -337,6 +337,36 @@ def test_profanity_debug_passes_manifest_and_timing_options(
     assert call_kwargs["pad_seconds"] == pytest.approx(0.125)
     assert call_kwargs["context_seconds"] == pytest.approx(0.75)
     assert call_kwargs["gap_seconds"] == pytest.approx(0.4)
+    assert call_kwargs["preclassification_position"] == "prepend"
+
+
+def test_profanity_debug_passes_preclassification_position(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "audio.m4a"
+    audio_file.write_bytes(b"audio")
+    output_file = tmp_path / "debug.m4a"
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "profanity-debug",
+            "--audio-file",
+            str(audio_file),
+            "--output",
+            str(output_file),
+            "--preclassification-position",
+            "append",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    call_kwargs = fake_pipeline.calls[0][2]
+    assert call_kwargs["preclassification_position"] == "append"
 
 
 def test_global_debug_flag_prints_message(monkeypatch, tmp_path: Path) -> None:

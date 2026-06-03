@@ -28,14 +28,22 @@ Use `profanity-debug` when tuning profanity lexicons, sound packs, timing paddin
   - `--profanity-pad-ms INTEGER` (default `80`; ignored when `--manifest` is provided)
   - `--context-seconds FLOAT` (default `0.5`)
   - `--gap-seconds FLOAT` (default `0.3`)
+  - `--preclassification-position prepend|append|off` (default `prepend`)
   - `--work-dir TEXT`
 
 ## Manifest behavior
 
 - When `--manifest` is provided, the command reuses `profanity_sfx.events` from that file instead of rerunning transcription and profanity detection.
-- If the manifest includes `video_prompt_preclassification`, that metadata is passed through so the debug artifact preserves context.
+- If the manifest includes `video_prompt_preclassification`, that metadata is reused for spoken pre-classification narration.
+- If manifest pre-classification data is missing, the command can generate it live from transcript text.
 - If the manifest includes `narration_text`, it is reused as transcript context for the debug build.
 - When `--manifest` is not provided, the command uses the configured STT model, profanity lexicon, and sound pack to discover events from scratch.
+
+## Pre-classification narration placement
+
+- `--preclassification-position prepend` inserts pre-classification narration in the opening debug summary.
+- `--preclassification-position append` moves pre-classification narration to the closing diagnostic summary.
+- `--preclassification-position off` disables pre-classification narration while keeping profanity event diagnostics.
 
 ## Mechanism Flow
 
@@ -82,6 +90,15 @@ content-creator profanity-debug \
   --profanity-pad-ms 125 \
   --context-seconds 0.75 \
   --gap-seconds 0.4
+```
+
+Append pre-classification narration to the end of the debug artifact:
+
+```bash
+content-creator profanity-debug \
+  --audio-file ./assets/interview.wav \
+  --output ./output/interview-profanity-debug.m4a \
+  --preclassification-position append
 ```
 
 ## Failure Modes to Expect

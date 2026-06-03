@@ -9,6 +9,7 @@ The `calibrate` command enables you to:
 - **Tune risk thresholds** by understanding which signals changed and by how much
 - **Audit model behavior** by side-by-side comparison of risk scores, risk levels, and visual intensity recommendations
 - **Track quality metrics** across runs to measure the impact of ensemble enhancements
+- **Inspect high-fidelity dimensions** including fact-check estimates, aggression, social scoring, contemporary alignment, and propaganda alignment
 
 ## Usage
 
@@ -31,11 +32,11 @@ content-creator calibrate \
 
 ## Options
 
-| Option | Type | Required | Description |
-|--------|------|----------|-------------|
-| `--manifest-old` | Path | ✅ Yes | Path to baseline manifest (old/LLM-only preclassification) |
-| `--manifest-new` | Path | ✅ Yes | Path to new manifest (ensemble-enhanced preclassification) |
-| `--output` | Path | ❌ No | Save report as JSON file; prints to stdout if omitted |
+| Option           | Type | Required | Description                                                |
+| ---------------- | ---- | -------- | ---------------------------------------------------------- |
+| `--manifest-old` | Path | ✅ Yes    | Path to baseline manifest (old/LLM-only preclassification) |
+| `--manifest-new` | Path | ✅ Yes    | Path to new manifest (ensemble-enhanced preclassification) |
+| `--output`       | Path | ❌ No     | Save report as JSON file; prints to stdout if omitted      |
 
 ## Output
 

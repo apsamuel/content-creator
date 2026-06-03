@@ -173,6 +173,46 @@ def test_generate_video_prompt_uses_llm_text() -> None:
                         "confidence_score": 0.61,
                         "reason": "The transcript is descriptive but does not include enough evidence to verify its implied claims.",
                     },
+                    "fact_check": {
+                        "label": "MixedOrNeedsEvidence",
+                        "confidence_score": 0.64,
+                        "reason": "Claims are plausible but require external evidence not present in the transcript.",
+                    },
+                    "aggression": {
+                        "label": "Low",
+                        "confidence_score": 0.82,
+                        "reason": "Language remains calm and non-confrontational.",
+                    },
+                    "social_score": {
+                        "prosocial_antisocial": {
+                            "label": "ProSocial",
+                            "confidence_score": 0.7,
+                            "reason": "The speaker uses cooperative and constructive language.",
+                        },
+                        "cohesion_divisiveness": {
+                            "label": "Cohesive",
+                            "confidence_score": 0.73,
+                            "reason": "The narrative framing encourages shared direction.",
+                        },
+                        "norm_alignment": {
+                            "label": "Aligned",
+                            "confidence_score": 0.66,
+                            "reason": "Language mostly aligns with broadly accepted social framing.",
+                        },
+                        "composite_social_score": 0.76,
+                        "composite_label": "ProSocial",
+                        "reason": "Composite score indicates constructive social framing.",
+                    },
+                    "contemporary_alignment": {
+                        "label": "Aligned",
+                        "confidence_score": 0.62,
+                        "reason": "Narrative framing mostly follows contemporary mainstream interpretations.",
+                    },
+                    "propaganda_alignment": {
+                        "label": "Low",
+                        "confidence_score": 0.8,
+                        "reason": "The transcript has low manipulative rhetorical pressure.",
+                    },
                     "formality": {
                         "label": "Mixed",
                         "confidence_score": 0.73,
@@ -247,6 +287,22 @@ def test_generate_video_prompt_uses_llm_text() -> None:
     assert plan.preclassification.sentence_count == 1
     assert plan.preclassification.truthfulness_assessment.label == "MixedOrUnverifiable"
     assert plan.preclassification.truthfulness_assessment.confidence_score == 0.61
+    assert plan.preclassification.fact_check_assessment is not None
+    assert plan.preclassification.fact_check_assessment.label == "MixedOrNeedsEvidence"
+    assert plan.preclassification.aggression_assessment is not None
+    assert plan.preclassification.aggression_assessment.label == "Low"
+    assert plan.preclassification.social_score_assessment is not None
+    assert (
+        plan.preclassification.social_score_assessment.prosocial_antisocial.label
+        == "ProSocial"
+    )
+    assert plan.preclassification.social_score_assessment.composite_label == "ProSocial"
+    assert (
+        plan.preclassification.contemporary_alignment_assessment is not None
+        and plan.preclassification.contemporary_alignment_assessment.label == "Aligned"
+    )
+    assert plan.preclassification.propaganda_assessment is not None
+    assert plan.preclassification.propaganda_assessment.label == "Low"
     assert (
         "verify its implied claims"
         in plan.preclassification.truthfulness_assessment.reason
@@ -291,6 +347,11 @@ def test_generate_video_prompt_uses_llm_text() -> None:
     assert "low-angle hero framing" in llm.prompts[0]
     assert "dynamic handheld framing" in llm.prompts[0]
     assert '"truthfulness"' in llm.prompts[1]
+    assert '"fact_check"' in llm.prompts[1]
+    assert '"aggression"' in llm.prompts[1]
+    assert '"social_score"' in llm.prompts[1]
+    assert '"contemporary_alignment"' in llm.prompts[1]
+    assert '"propaganda_alignment"' in llm.prompts[1]
     assert '"speaker_sentiment"' in llm.prompts[1]
     assert '"conversation_insights"' in llm.prompts[1]
     assert plan.prompts is not None
@@ -301,7 +362,21 @@ def test_generate_video_prompt_uses_llm_text() -> None:
     assert plan.preclassification.communication_metrics is not None
     assert plan.preclassification.communication_metrics.profanity_word_count == 0
     assert plan.preclassification.communication_metrics.profanity_rate == 0.0
+    assert (
+        plan.preclassification.communication_metrics.profanity_per_sentence_ratio == 0.0
+    )
+    assert (
+        plan.preclassification.communication_metrics.profanity_to_non_profanity_ratio
+        == 0.0
+    )
     assert plan.preclassification.communication_metrics.words_per_minute is None
+    assert (
+        plan.preclassification.communication_metrics.sentence_complexity_score >= 0.0
+    )
+    assert (
+        plan.preclassification.communication_metrics.sentence_complexity_label
+        in {"Simple", "Moderate", "Complex"}
+    )
     assert (
         plan.preclassification.communication_metrics.communication_capability_label
         in {"High", "Moderate", "NeedsImprovement"}
@@ -413,8 +488,29 @@ def test_generate_video_prompt_plan_includes_wpm_and_profanity_rate() -> None:
     metrics = plan.preclassification.communication_metrics
     assert metrics.profanity_word_count == 2
     assert metrics.profanity_rate == 0.1818
+    assert metrics.profanity_per_sentence_ratio == 2.0
+    assert metrics.profanity_to_non_profanity_ratio == 0.2222
     assert metrics.words_per_minute == 44.0
     assert metrics.average_words_per_sentence == 11.0
+    assert metrics.sentence_complexity_score == 0.0909
+    assert metrics.sentence_complexity_label == "Simple"
+
+
+def test_sentence_complexity_label_reflects_word_length_distribution() -> None:
+    planner = ScenePlanner(StubLLM("{}"))
+
+    simple_score, simple_label = planner._compute_sentence_complexity_from_word_lengths(
+        "a to be me we go"
+    )
+    complex_score, complex_label = (
+        planner._compute_sentence_complexity_from_word_lengths(
+            "interoperability hyperparameterization institutionalization"
+        )
+    )
+
+    assert simple_score < complex_score
+    assert simple_label == "Simple"
+    assert complex_label == "Complex"
 
 
 def test_generate_video_prompt_enforces_cartoon_style_prefix_when_missing() -> None:
@@ -610,6 +706,179 @@ def test_generate_video_prompt_defaults_truthfulness_when_json_missing() -> None
         plan.preclassification.interaction_style_assessment.speaker_sentiment[0].speaker
         == "Unknown"
     )
+
+
+def test_generate_video_prompt_analysis_alias_keys_are_normalized() -> None:
+    llm = StubLLM(
+        [
+            json.dumps(
+                {
+                    "mood": "Neutral",
+                    "has_foul_language": "No",
+                    "video_prompt": "cartoon style city bridge at sunrise",
+                }
+            ),
+            json.dumps(
+                {
+                    "truthfulness_assessment": {
+                        "label": "LikelyTruthful",
+                        "confidence_score": 0.71,
+                        "reason": "Internal consistency is strong.",
+                    },
+                    "fact_checking": {
+                        "label": "LikelyAccurate",
+                        "confidence_score": 0.69,
+                        "reason": "Claims appear self-consistent in transcript context.",
+                    },
+                    "interaction_style_assessment": {
+                        "formality": {
+                            "label": "Mixed",
+                            "confidence_score": 0.55,
+                            "reason": "Style varies by segment.",
+                        },
+                        "certainty_hedging": {
+                            "label": "Balanced",
+                            "confidence_score": 0.52,
+                            "reason": "Moderate confidence language.",
+                        },
+                        "persuasion_intent": {
+                            "label": "LowOrNone",
+                            "confidence_score": 0.61,
+                            "reason": "Little pressure language.",
+                        },
+                        "claim_density": {
+                            "label": "Medium",
+                            "confidence_score": 0.57,
+                            "reason": "Mixed narration and claims.",
+                        },
+                        "speaker_sentiment": [
+                            {
+                                "speaker": "Unknown",
+                                "sentiment": "Neutral",
+                                "confidence_score": 0.6,
+                                "reason": "Tone is steady.",
+                            }
+                        ],
+                    },
+                }
+            ),
+        ]
+    )
+    planner = ScenePlanner(llm)
+
+    plan = planner.generate_video_prompt_plan(narration_text="A short status update.")
+
+    assert plan.preclassification is not None
+    assert plan.preclassification.truthfulness_assessment.label == "LikelyTruthful"
+    assert plan.preclassification.truthfulness_assessment.confidence_score == 0.71
+    assert plan.preclassification.fact_check_assessment is not None
+    assert plan.preclassification.fact_check_assessment.label == "LikelyAccurate"
+    assert (
+        plan.preclassification.interaction_style_assessment.formality.label == "Mixed"
+    )
+
+
+def test_generate_video_prompt_analysis_json_fence_is_parsed() -> None:
+    llm = StubLLM(
+        [
+            json.dumps(
+                {
+                    "mood": "Neutral",
+                    "has_foul_language": "No",
+                    "video_prompt": "cartoon style station platform at dusk",
+                }
+            ),
+            """
+Here is the requested object:
+```json
+{
+  "truthfulness": {"label": "MixedOrUnverifiable", "confidence_score": 0.66, "reason": "Needs external validation."},
+  "fact_check": {"label": "MixedOrNeedsEvidence", "confidence_score": 0.62, "reason": "Evidence is incomplete."},
+  "formality": {"label": "Mixed", "confidence_score": 0.58, "reason": "Blend of casual and formal language."},
+  "certainty_hedging": {"label": "Balanced", "confidence_score": 0.59, "reason": "Balanced certainty language."},
+  "persuasion_intent": {"label": "LowOrNone", "confidence_score": 0.61, "reason": "No strong persuasion cues."},
+  "claim_density": {"label": "Medium", "confidence_score": 0.56, "reason": "Moderate assertion density."},
+  "speaker_sentiment": [{"speaker": "Unknown", "sentiment": "Neutral", "confidence_score": 0.64, "reason": "Steady tone."}]
+}
+```
+""",
+        ]
+    )
+    planner = ScenePlanner(llm)
+
+    plan = planner.generate_video_prompt_plan(narration_text="Short exchange.")
+
+    assert plan.preclassification is not None
+    assert plan.preclassification.truthfulness_assessment.confidence_score == 0.66
+    assert plan.preclassification.fact_check_assessment is not None
+    assert plan.preclassification.fact_check_assessment.confidence_score == 0.62
+
+
+def test_generate_video_prompt_analysis_retries_after_non_json_response() -> None:
+    llm = StubLLM(
+        [
+            json.dumps(
+                {
+                    "mood": "Hopeful",
+                    "has_foul_language": "No",
+                    "video_prompt": "cartoon style dawn skyline with warm tones",
+                }
+            ),
+            "I cannot comply with that format.",
+            json.dumps(
+                {
+                    "truthfulness": {
+                        "label": "LikelyTruthful",
+                        "confidence_score": 0.73,
+                        "reason": "Transcript appears internally consistent.",
+                    },
+                    "fact_check": {
+                        "label": "LikelyAccurate",
+                        "confidence_score": 0.68,
+                        "reason": "Claims are plausible from transcript context.",
+                    },
+                    "formality": {
+                        "label": "Mixed",
+                        "confidence_score": 0.57,
+                        "reason": "Language register varies.",
+                    },
+                    "certainty_hedging": {
+                        "label": "Balanced",
+                        "confidence_score": 0.58,
+                        "reason": "Balanced certainty markers.",
+                    },
+                    "persuasion_intent": {
+                        "label": "LowOrNone",
+                        "confidence_score": 0.6,
+                        "reason": "Informational tone dominates.",
+                    },
+                    "claim_density": {
+                        "label": "Medium",
+                        "confidence_score": 0.55,
+                        "reason": "Moderate number of claims.",
+                    },
+                    "speaker_sentiment": [
+                        {
+                            "speaker": "Unknown",
+                            "sentiment": "Positive",
+                            "confidence_score": 0.61,
+                            "reason": "Overall optimistic language.",
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    planner = ScenePlanner(llm)
+
+    plan = planner.generate_video_prompt_plan(narration_text="A clean status message.")
+
+    assert plan.preclassification is not None
+    assert plan.preclassification.truthfulness_assessment.label == "LikelyTruthful"
+    assert plan.preclassification.fact_check_assessment is not None
+    assert plan.preclassification.fact_check_assessment.label == "LikelyAccurate"
+    assert len(llm.prompts) == 3
+    assert "IMPORTANT: Return ONLY a single valid JSON object" in llm.prompts[2]
 
 
 def test_generate_video_prompt_preserves_labeled_speaker_sentiment() -> None:

@@ -13,6 +13,7 @@ from content_creator.planner import (
     InteractionStyleAssessment,
     Scene,
     ScenePlan,
+    SocialScoreAssessment,
     SpeakerSentimentAssessment,
     TranscriptAssessment,
     VideoPromptPlan,
@@ -134,6 +135,46 @@ class FakePlanner:
                     confidence_score=0.58,
                     reason="The narration makes general claims without evidence that can be checked from the transcript alone.",
                 ),
+                fact_check_assessment=TranscriptAssessment(
+                    label="MixedOrNeedsEvidence",
+                    confidence_score=0.61,
+                    reason="The transcript suggests plausible claims but lacks direct evidence for strict verification.",
+                ),
+                aggression_assessment=TranscriptAssessment(
+                    label="Low",
+                    confidence_score=0.83,
+                    reason="The language is calm and not overtly confrontational.",
+                ),
+                social_score_assessment=SocialScoreAssessment(
+                    prosocial_antisocial=TranscriptAssessment(
+                        label="ProSocial",
+                        confidence_score=0.72,
+                        reason="The framing is constructive and cooperative.",
+                    ),
+                    cohesion_divisiveness=TranscriptAssessment(
+                        label="Cohesive",
+                        confidence_score=0.69,
+                        reason="The tone encourages shared direction.",
+                    ),
+                    norm_alignment=TranscriptAssessment(
+                        label="Aligned",
+                        confidence_score=0.66,
+                        reason="Most statements align with broad contemporary social framing.",
+                    ),
+                    composite_social_score=0.74,
+                    composite_label="ProSocial",
+                    reason="Composite social score indicates constructive social framing.",
+                ),
+                contemporary_alignment_assessment=TranscriptAssessment(
+                    label="Aligned",
+                    confidence_score=0.63,
+                    reason="The transcript broadly aligns with contemporary mainstream framing.",
+                ),
+                propaganda_assessment=TranscriptAssessment(
+                    label="Low",
+                    confidence_score=0.79,
+                    reason="Rhetorical pressure appears limited and not strongly propagandistic.",
+                ),
                 interaction_style_assessment=InteractionStyleAssessment(
                     formality=TranscriptAssessment(
                         label="Mixed",
@@ -195,6 +236,8 @@ class FakePlanner:
                 communication_metrics=CommunicationMetrics(
                     profanity_word_count=0,
                     profanity_rate=0.0,
+                    profanity_per_sentence_ratio=0.0,
+                    profanity_to_non_profanity_ratio=0.0,
                     words_per_minute=(
                         round((12 / duration_seconds) * 60.0, 1)
                         if isinstance(duration_seconds, (int, float))
@@ -202,6 +245,8 @@ class FakePlanner:
                         else None
                     ),
                     average_words_per_sentence=6.0,
+                    sentence_complexity_score=0.42,
+                    sentence_complexity_label="Moderate",
                     communication_capability_score=0.81,
                     communication_capability_label="High",
                     communication_notes="Clear and effective communication with strong collaborative signals.",
@@ -380,6 +425,204 @@ def test_wrap_transcription_splits_long_line() -> None:
     assert " ".join(lines) == transcript
 
 
+def _stub_profanity_debug_media_ops(
+    monkeypatch: pytest.MonkeyPatch,
+    pipeline: VideoGenerationPipeline,
+    synthesized_long_speech: list[str],
+) -> None:
+    def _write_binary(path: Path, payload: bytes = b"audio") -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+
+    monkeypatch.setattr(
+        pipeline,
+        "_synthesize_long_speech",
+        lambda text, destination, _tmp: (
+            synthesized_long_speech.append(text),
+            _write_binary(destination),
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_ffmpeg_generate_silence",
+        lambda output_path, duration_seconds: _write_binary(output_path),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_ffmpeg_normalize_audio",
+        lambda input_path, output_path: _write_binary(output_path),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_ffmpeg_extract_audio_segment",
+        lambda audio_path, output_path, start_seconds, end_seconds: _write_binary(
+            output_path
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_ffmpeg_extract_bleep",
+        lambda sfx_path, output_path, duration_seconds: _write_binary(output_path),
+    )
+
+
+def test_build_profanity_debug_audio_generates_live_preclassification_for_append_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    statuses: list[str] = []
+    synthesized_long_speech: list[str] = []
+    pipeline = VideoGenerationPipeline(
+        _config(tmp_path), status_callback=statuses.append
+    )
+    _stub_profanity_debug_media_ops(monkeypatch, pipeline, synthesized_long_speech)
+
+    def _fake_subprocess_run(args, check, capture_output, text):
+        output_path = Path(str(args[-1]))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"debug")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(pipeline_module.subprocess, "run", _fake_subprocess_run)
+
+    output_path = tmp_path / "debug.m4a"
+    event_count = pipeline.build_profanity_debug_audio(
+        audio_path=tmp_path / "audio.m4a",
+        output_path=output_path,
+        manifest_events=[
+            {
+                "word": "damn",
+                "start_seconds": 0.5,
+                "end_seconds": 0.7,
+                "sfx": str(tmp_path / "beep.wav"),
+                "sfx_duration_seconds": 0.2,
+            }
+        ],
+        transcript_text="this is transcript text for live preclassification",
+        preclassification_data=None,
+        preclassification_position="append",
+    )
+
+    assert event_count == 1
+    assert output_path.exists()
+    assert pipeline._planner.generated_video_prompt_plan_inputs == [
+        "this is transcript text for live preclassification"
+    ]
+    assert any(
+        "Generating live pre-classification for debug narration" in status
+        for status in statuses
+    )
+    assert len(synthesized_long_speech) == 2
+    assert "Pre-classification report." not in synthesized_long_speech[0]
+    assert "Mood: Hopeful." in synthesized_long_speech[1]
+    assert "Profanity per sentence ratio:" in synthesized_long_speech[1]
+    assert "Profanity to non-profanity ratio:" in synthesized_long_speech[1]
+    assert "Sentence complexity:" in synthesized_long_speech[1]
+
+
+def test_build_profanity_debug_audio_prepend_mode_includes_preclassification_in_intro(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    synthesized_long_speech: list[str] = []
+    pipeline = VideoGenerationPipeline(_config(tmp_path))
+    _stub_profanity_debug_media_ops(monkeypatch, pipeline, synthesized_long_speech)
+    monkeypatch.setattr(
+        pipeline_module.subprocess,
+        "run",
+        lambda args, check, capture_output, text: types.SimpleNamespace(
+            returncode=0, stdout="", stderr=""
+        ),
+    )
+
+    pipeline.build_profanity_debug_audio(
+        audio_path=tmp_path / "audio.m4a",
+        output_path=tmp_path / "debug.m4a",
+        manifest_events=[
+            {
+                "word": "damn",
+                "start_seconds": 0.5,
+                "end_seconds": 0.7,
+                "sfx": str(tmp_path / "beep.wav"),
+                "sfx_duration_seconds": 0.2,
+            }
+        ],
+        preclassification_data={
+            "mood": "Serious",
+            "has_foul_language": True,
+            "communication_metrics": {
+                "profanity_per_sentence_ratio": 0.5,
+                "profanity_to_non_profanity_ratio": 0.125,
+                "sentence_complexity_score": 0.62,
+                "sentence_complexity_label": "Moderate",
+            },
+        },
+        preclassification_position="prepend",
+    )
+
+    assert len(synthesized_long_speech) == 2
+    assert "Pre-classification report." in synthesized_long_speech[0]
+    assert "mood: Serious" in synthesized_long_speech[0]
+    assert "Profanity per sentence ratio: 0.5000." in synthesized_long_speech[0]
+    assert "Profanity to non-profanity ratio: 0.1250." in synthesized_long_speech[0]
+    assert "Sentence complexity: Moderate at 0.6200." in synthesized_long_speech[0]
+    assert "Mood: Serious." not in synthesized_long_speech[1]
+
+
+def test_build_profanity_debug_audio_off_mode_excludes_preclassification_narration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FakePlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    synthesized_long_speech: list[str] = []
+    pipeline = VideoGenerationPipeline(_config(tmp_path))
+    _stub_profanity_debug_media_ops(monkeypatch, pipeline, synthesized_long_speech)
+    monkeypatch.setattr(
+        pipeline_module.subprocess,
+        "run",
+        lambda args, check, capture_output, text: types.SimpleNamespace(
+            returncode=0, stdout="", stderr=""
+        ),
+    )
+
+    pipeline.build_profanity_debug_audio(
+        audio_path=tmp_path / "audio.m4a",
+        output_path=tmp_path / "debug.m4a",
+        manifest_events=[
+            {
+                "word": "damn",
+                "start_seconds": 0.5,
+                "end_seconds": 0.7,
+                "sfx": str(tmp_path / "beep.wav"),
+                "sfx_duration_seconds": 0.2,
+            }
+        ],
+        preclassification_data={"mood": "Serious", "has_foul_language": True},
+        preclassification_position="off",
+    )
+
+    assert len(synthesized_long_speech) == 2
+    assert "Pre-classification report." not in synthesized_long_speech[0]
+    assert "Mood: Serious." not in synthesized_long_speech[1]
+
+
 def test_generate_from_text_writes_manifest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -411,7 +654,8 @@ def test_generate_from_text_writes_manifest(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["narration_text"] == "Narration"
     assert manifest["video_prompt"] == "Video direction"
-    assert manifest["video_prompt_preclassification"] is None
+    assert isinstance(manifest["video_prompt_preclassification"], dict)
+    assert manifest["video_prompt_preclassification"]["mood"] == "Hopeful"
     assert len(manifest["scenes"]) == 2
     assert manifest["scenes"][0]["prepared_prompt"] == "Prompt A :: prepared 1/2"
     assert manifest["scenes"][1]["prepared_prompt"] == "Prompt B :: prepared 2/2"
@@ -597,6 +841,46 @@ def test_generate_from_text_can_generate_video_prompt(
             "confidence_score": 0.58,
             "reason": "The narration makes general claims without evidence that can be checked from the transcript alone.",
         },
+        "fact_check_assessment": {
+            "label": "MixedOrNeedsEvidence",
+            "confidence_score": 0.61,
+            "reason": "The transcript suggests plausible claims but lacks direct evidence for strict verification.",
+        },
+        "aggression_assessment": {
+            "label": "Low",
+            "confidence_score": 0.83,
+            "reason": "The language is calm and not overtly confrontational.",
+        },
+        "social_score_assessment": {
+            "prosocial_antisocial": {
+                "label": "ProSocial",
+                "confidence_score": 0.72,
+                "reason": "The framing is constructive and cooperative.",
+            },
+            "cohesion_divisiveness": {
+                "label": "Cohesive",
+                "confidence_score": 0.69,
+                "reason": "The tone encourages shared direction.",
+            },
+            "norm_alignment": {
+                "label": "Aligned",
+                "confidence_score": 0.66,
+                "reason": "Most statements align with broad contemporary social framing.",
+            },
+            "composite_social_score": 0.74,
+            "composite_label": "ProSocial",
+            "reason": "Composite social score indicates constructive social framing.",
+        },
+        "contemporary_alignment_assessment": {
+            "label": "Aligned",
+            "confidence_score": 0.63,
+            "reason": "The transcript broadly aligns with contemporary mainstream framing.",
+        },
+        "propaganda_assessment": {
+            "label": "Low",
+            "confidence_score": 0.79,
+            "reason": "Rhetorical pressure appears limited and not strongly propagandistic.",
+        },
         "interaction_style_assessment": {
             "formality": {
                 "label": "Mixed",
@@ -658,13 +942,31 @@ def test_generate_from_text_can_generate_video_prompt(
         "communication_metrics": {
             "profanity_word_count": 0,
             "profanity_rate": 0.0,
+            "profanity_per_sentence_ratio": 0.0,
+            "profanity_to_non_profanity_ratio": 0.0,
             "words_per_minute": 144.0,
             "average_words_per_sentence": 6.0,
+            "sentence_complexity_score": 0.42,
+            "sentence_complexity_label": "Moderate",
             "communication_capability_score": 0.81,
             "communication_capability_label": "High",
             "communication_notes": "Clear and effective communication with strong collaborative signals.",
         },
     }
+    analysis_summary = manifest.get("analysis_summary")
+    assert isinstance(analysis_summary, dict)
+    summary_path = Path(str(analysis_summary["path"]))
+    assert summary_path.exists()
+    summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert (
+        summary_payload["dimensions"]["fact_check"]["label"] == "MixedOrNeedsEvidence"
+    )
+    assert summary_payload["dimensions"]["aggression"]["label"] == "Low"
+    assert (
+        summary_payload["dimensions"]["social_score"]["composite_label"] == "ProSocial"
+    )
+    assert summary_payload["dimensions"]["contemporary_alignment"]["label"] == "Aligned"
+    assert summary_payload["dimensions"]["propaganda_alignment"]["label"] == "Low"
 
 
 def test_generate_from_text_includes_cinematic_intro_when_enabled(

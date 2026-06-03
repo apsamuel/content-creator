@@ -655,7 +655,7 @@ def from_audio(
             env_var="HF_TRANSCRIBE_WORKERS",
             option_name="--transcribe-workers",
         )
-        (resolved_speaker_count, resolved_min_speakers, resolved_max_speakers) = (
+        resolved_speaker_count, resolved_min_speakers, resolved_max_speakers = (
             _resolve_diarization_speaker_options(
                 speaker_count=speaker_count,
                 min_speakers=min_speakers,
@@ -990,7 +990,7 @@ def transcribe(
             env_var="HF_TRANSCRIBE_WORKERS",
             option_name="--transcribe-workers",
         )
-        (resolved_speaker_count, resolved_min_speakers, resolved_max_speakers) = (
+        resolved_speaker_count, resolved_min_speakers, resolved_max_speakers = (
             _resolve_diarization_speaker_options(
                 speaker_count=speaker_count,
                 min_speakers=min_speakers,
@@ -1243,6 +1243,16 @@ def lexicon_doctor(
     type=click.FloatRange(0.0, None),
     help="Duration of silence inserted between audio sections within each event.",
 )
+@click.option(
+    "--preclassification-position",
+    default="prepend",
+    show_default=True,
+    type=click.Choice(["prepend", "append", "off"], case_sensitive=False),
+    help=(
+        "Where to place spoken pre-classification metadata in debug audio. "
+        "Use off to disable pre-classification narration."
+    ),
+)
 @click.option("--work-dir", default=None, help="Directory for intermediate assets.")
 @click.pass_context
 def profanity_debug(
@@ -1255,6 +1265,7 @@ def profanity_debug(
     profanity_pad_ms: int,
     context_seconds: float,
     gap_seconds: float,
+    preclassification_position: str,
     work_dir: str | None,
 ) -> None:
     """Generate a debug audio file illustrating each detected profanity event.
@@ -1265,7 +1276,7 @@ def profanity_debug(
     "Profanity filter implemented"; and the exact bleep production would overlay.
 
     Use --manifest to skip re-transcription and load events from an existing
-    manifest.json produced by the transcribe command.
+    manifest.json produced by a prior pipeline run.
     """
 
     def _operation() -> None:
@@ -1319,6 +1330,7 @@ def profanity_debug(
             pad_seconds=profanity_pad_ms / 1000.0,
             context_seconds=context_seconds,
             gap_seconds=gap_seconds,
+            preclassification_position=preclassification_position.lower(),
         )
         if event_count == 0:
             click.echo("ℹ️ No profanity events found — no debug audio generated.")

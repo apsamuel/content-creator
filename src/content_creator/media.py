@@ -183,37 +183,48 @@ class MediaAssembler:
             )
 
         final_visual_path = stitched
+        intro_applied = False
         if cinematic_intro is not None:
             intro_clip = work_dir / "intro_card.mp4"
-            self._render_intro_card(intro_card=cinematic_intro, output_path=intro_clip)
+            try:
+                self._render_intro_card(
+                    intro_card=cinematic_intro, output_path=intro_clip
+                )
 
-            intro_concat_list = work_dir / "concat_intro.txt"
-            intro_concat_list.write_text(
-                "\n".join(
-                    [f"file '{intro_clip.as_posix()}'", f"file '{stitched.as_posix()}'"]
-                ),
-                encoding="utf-8",
-            )
-            stitched_with_intro = work_dir / "stitched_with_intro.mp4"
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-f",
-                    "concat",
-                    "-safe",
-                    "0",
-                    "-i",
-                    str(intro_concat_list),
-                    "-c",
-                    "copy",
-                    str(stitched_with_intro),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            final_visual_path = stitched_with_intro
+                intro_concat_list = work_dir / "concat_intro.txt"
+                intro_concat_list.write_text(
+                    "\n".join(
+                        [
+                            f"file '{intro_clip.as_posix()}'",
+                            f"file '{stitched.as_posix()}'",
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+                stitched_with_intro = work_dir / "stitched_with_intro.mp4"
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-f",
+                        "concat",
+                        "-safe",
+                        "0",
+                        "-i",
+                        str(intro_concat_list),
+                        "-c",
+                        "copy",
+                        str(stitched_with_intro),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                final_visual_path = stitched_with_intro
+                intro_applied = True
+            except subprocess.CalledProcessError as exc:
+                if not self._is_drawtext_unavailable(exc):
+                    raise
 
         if television_overlay_effects:
             tv_effects_path = work_dir / "stitched_tv_effects.mp4"
@@ -224,7 +235,7 @@ class MediaAssembler:
 
         intro_delay_seconds = (
             max(0.0, float(cinematic_intro.duration_seconds))
-            if cinematic_intro is not None
+            if cinematic_intro is not None and intro_applied
             else 0.0
         )
         self.mux_visual_with_audio(
@@ -286,6 +297,12 @@ class MediaAssembler:
             text=True,
         )
         return output_path
+
+    def _is_drawtext_unavailable(self, exc: subprocess.CalledProcessError) -> bool:
+        stderr_output = (exc.stderr or "").lower()
+        return "drawtext" in stderr_output and (
+            "no such filter" in stderr_output or "filter not found" in stderr_output
+        )
 
     def _stitch_with_cinematic_transitions(
         self, *, clip_paths: list[Path], scenes: list[Scene], output_path: Path

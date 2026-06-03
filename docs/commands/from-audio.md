@@ -72,6 +72,7 @@ Use `from-audio` when you already have narration audio and want matching visuals
 - `--television-overlay-effects` applies a procedural ffmpeg pass after scene stitching to simulate an old-television presentation using generated scanlines, vignette, noise, bezel shading, and screen padding.
 - `--image-workers` controls parallel scene image generation after planning completes.
 - `--images-per-scene` controls how many coherent image variants are generated per scene clip before ffmpeg assembly.
+- Pre-classification metadata is always generated from transcript text and stored in `manifest.json`, even when `--video-prompt` is provided.
 - `--view-preclassification` prints the planner's preclassification block after LLM analysis.
 
 ## Mechanism Flow

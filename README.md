@@ -270,7 +270,8 @@ Each run writes intermediate assets to the configured work directory:
 - generated narration or the referenced audio track
 - per-scene images
 - temporary scene clips
-- `manifest.json` with prompts, transcript text, scene durations, and video-prompt preclassification metadata
+- `manifest.json` with prompts, transcript text, scene durations, and high-fidelity video-prompt preclassification metadata
+- `analysis_summary.json` with an expanded, debug-friendly pre-analysis snapshot
 
 Example `video_prompt_preclassification` block written to `manifest.json`:
 
@@ -285,6 +286,46 @@ Example `video_prompt_preclassification` block written to `manifest.json`:
       "label": "MostlyFactual",
       "confidence_score": 0.82,
       "reason": "Content contains verifiable technical claims with no apparent exaggeration."
+    },
+    "fact_check_assessment": {
+      "label": "MixedOrNeedsEvidence",
+      "confidence_score": 0.64,
+      "reason": "Claims are plausible but require external evidence not present in the transcript."
+    },
+    "aggression_assessment": {
+      "label": "Low",
+      "confidence_score": 0.83,
+      "reason": "Language remains calm and non-confrontational."
+    },
+    "social_score_assessment": {
+      "prosocial_antisocial": {
+        "label": "ProSocial",
+        "confidence_score": 0.72,
+        "reason": "The framing is constructive and cooperative."
+      },
+      "cohesion_divisiveness": {
+        "label": "Cohesive",
+        "confidence_score": 0.69,
+        "reason": "The tone encourages shared direction."
+      },
+      "norm_alignment": {
+        "label": "Aligned",
+        "confidence_score": 0.66,
+        "reason": "Most statements align with broad contemporary social framing."
+      },
+      "composite_social_score": 0.74,
+      "composite_label": "ProSocial",
+      "reason": "Composite social score indicates constructive social framing."
+    },
+    "contemporary_alignment_assessment": {
+      "label": "Aligned",
+      "confidence_score": 0.63,
+      "reason": "Narrative framing largely aligns with contemporary mainstream interpretation."
+    },
+    "propaganda_assessment": {
+      "label": "Low",
+      "confidence_score": 0.79,
+      "reason": "Rhetorical pressure appears limited and not strongly propagandistic."
     },
     "interaction_style_assessment": {
       "formality": {
@@ -326,7 +367,7 @@ Example `video_prompt_preclassification` block written to `manifest.json`:
 }
 ```
 
-Use `--view-preclassification` on `from-text` or `from-audio` to print this block to the terminal immediately after the LLM analysis completes, without waiting for the full video render.
+Use `--view-preclassification` on `from-text` or `from-audio` to print this block and a concise high-fidelity rollup to the terminal immediately after analysis completes. The generated `analysis_summary.json` path is also surfaced for debug workflows.
 
 ## Notes
 

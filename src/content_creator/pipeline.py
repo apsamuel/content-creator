@@ -590,6 +590,7 @@ class VideoGenerationPipeline:
         pad_seconds: float = 0.08,
         context_seconds: float = 0.5,
         gap_seconds: float = 0.3,
+        preclassification_position: str = "prepend",
     ) -> int:
         """Build a debug audio file illustrating each profanity detection event.
 
@@ -600,6 +601,12 @@ class VideoGenerationPipeline:
 
         Returns the number of events processed (0 if none found).
         """
+        normalized_preclass_position = preclassification_position.strip().lower()
+        if normalized_preclass_position not in {"prepend", "append", "off"}:
+            raise ValueError(
+                "preclassification_position must be one of: prepend, append, off"
+            )
+
         if manifest_events is not None:
             events = manifest_events
         else:
@@ -647,6 +654,28 @@ class VideoGenerationPipeline:
         except Exception:
             source_duration_seconds = None
 
+        if (
+            preclassification_data is None
+            and transcript_text
+            and transcript_text.strip()
+        ):
+            self._status("🧪 Generating live pre-classification for debug narration")
+            try:
+                preclass_plan = self._resolve_video_prompt_plan(
+                    narration_text=transcript_text,
+                    video_prompt=None,
+                    generate_video_prompt=True,
+                    duration_seconds=source_duration_seconds,
+                )
+                preclassification_data = self._serialize_preclassification(
+                    preclass_plan.preclassification
+                )
+            except Exception as exc:
+                self._status(
+                    "⚠️ Unable to generate pre-classification for debug narration: "
+                    f"{exc}"
+                )
+
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         with tempfile.TemporaryDirectory(prefix="profanity_debug_") as tmp_str:
@@ -665,7 +694,11 @@ class VideoGenerationPipeline:
                 context_seconds=context_seconds,
                 gap_seconds=gap_seconds,
                 using_manifest_events=manifest_events is not None,
-                preclassification_data=preclassification_data,
+                preclassification_data=(
+                    preclassification_data
+                    if normalized_preclass_position == "prepend"
+                    else None
+                ),
             )
             if input_summary_text:
                 self._status("🎤 Prepending synthesized input summary")
@@ -743,10 +776,17 @@ class VideoGenerationPipeline:
             summary_text = self._build_debug_preclassification_summary(
                 events=events,
                 transcript_text=transcript_text,
-                preclassification_data=preclassification_data,
+                preclassification_data=(
+                    preclassification_data
+                    if normalized_preclass_position == "append"
+                    else None
+                ),
             )
             if summary_text:
-                self._status("🎤 Appending synthesized pre-classification summary")
+                if normalized_preclass_position == "append" and preclassification_data:
+                    self._status("🎤 Appending synthesized pre-classification summary")
+                else:
+                    self._status("🎤 Appending synthesized diagnostic summary")
                 summary_raw = tmp / "summary_raw.wav"
                 summary_path = tmp / "summary.wav"
                 self._synthesize_long_speech(summary_text, summary_raw, tmp)
@@ -858,6 +898,73 @@ class VideoGenerationPipeline:
                         truth_entry += f". {truth_reason}"
                     summary_parts.append(truth_entry + ".")
 
+            fact_check = preclassification_data.get("fact_check_assessment")
+            if isinstance(fact_check, dict):
+                label = fact_check.get("label", "")
+                confidence = fact_check.get("confidence_score")
+                reason = fact_check.get("reason", "")
+                if label:
+                    line = f"Fact-check estimate: {label}"
+                    if isinstance(confidence, (int, float)):
+                        line += f", confidence {float(confidence):.0%}"
+                    if reason:
+                        line += f". {reason}"
+                    summary_parts.append(line + ".")
+
+            aggression = preclassification_data.get("aggression_assessment")
+            if isinstance(aggression, dict):
+                label = aggression.get("label", "")
+                confidence = aggression.get("confidence_score")
+                reason = aggression.get("reason", "")
+                if label:
+                    line = f"Aggression estimate: {label}"
+                    if isinstance(confidence, (int, float)):
+                        line += f", confidence {float(confidence):.0%}"
+                    if reason:
+                        line += f". {reason}"
+                    summary_parts.append(line + ".")
+
+            contemporary = preclassification_data.get(
+                "contemporary_alignment_assessment"
+            )
+            if isinstance(contemporary, dict):
+                label = contemporary.get("label", "")
+                confidence = contemporary.get("confidence_score")
+                reason = contemporary.get("reason", "")
+                if label:
+                    line = f"Contemporary alignment: {label}"
+                    if isinstance(confidence, (int, float)):
+                        line += f", confidence {float(confidence):.0%}"
+                    if reason:
+                        line += f". {reason}"
+                    summary_parts.append(line + ".")
+
+            propaganda = preclassification_data.get("propaganda_assessment")
+            if isinstance(propaganda, dict):
+                label = propaganda.get("label", "")
+                confidence = propaganda.get("confidence_score")
+                reason = propaganda.get("reason", "")
+                if label:
+                    line = f"Propaganda alignment: {label}"
+                    if isinstance(confidence, (int, float)):
+                        line += f", confidence {float(confidence):.0%}"
+                    if reason:
+                        line += f". {reason}"
+                    summary_parts.append(line + ".")
+
+            social = preclassification_data.get("social_score_assessment")
+            if isinstance(social, dict):
+                label = social.get("composite_label", "")
+                score = social.get("composite_social_score")
+                reason = social.get("reason", "")
+                if label:
+                    line = f"Social score: {label}"
+                    if isinstance(score, (int, float)):
+                        line += f" at {float(score):.2f}"
+                    if reason:
+                        line += f". {reason}"
+                    summary_parts.append(line + ".")
+
             # Interaction style sub-dimensions
             if isinstance(style, dict):
                 style_dim_labels = {
@@ -903,6 +1010,45 @@ class VideoGenerationPipeline:
                             if reason:
                                 sent_entry += f". {reason}"
                             summary_parts.append(sent_entry + ".")
+
+            communication_metrics = preclassification_data.get("communication_metrics")
+            if isinstance(communication_metrics, dict):
+                profanity_per_sentence_ratio = communication_metrics.get(
+                    "profanity_per_sentence_ratio"
+                )
+                if isinstance(profanity_per_sentence_ratio, (int, float)):
+                    summary_parts.append(
+                        "Profanity per sentence ratio: "
+                        f"{float(profanity_per_sentence_ratio):.4f}."
+                    )
+
+                profanity_to_non_profanity_ratio = communication_metrics.get(
+                    "profanity_to_non_profanity_ratio"
+                )
+                if isinstance(profanity_to_non_profanity_ratio, (int, float)):
+                    summary_parts.append(
+                        "Profanity to non-profanity ratio: "
+                        f"{float(profanity_to_non_profanity_ratio):.4f}."
+                    )
+
+                sentence_complexity_score = communication_metrics.get(
+                    "sentence_complexity_score"
+                )
+                sentence_complexity_label = communication_metrics.get(
+                    "sentence_complexity_label"
+                )
+                if isinstance(sentence_complexity_score, (int, float)):
+                    if isinstance(sentence_complexity_label, str) and sentence_complexity_label.strip():
+                        summary_parts.append(
+                            "Sentence complexity: "
+                            f"{sentence_complexity_label.strip()} at "
+                            f"{float(sentence_complexity_score):.4f}."
+                        )
+                    else:
+                        summary_parts.append(
+                            "Sentence complexity score: "
+                            f"{float(sentence_complexity_score):.4f}."
+                        )
 
         summary_parts.append("Begin event diagnostics.")
         return " ".join(summary_parts)
@@ -964,6 +1110,72 @@ class VideoGenerationPipeline:
                     else:
                         summary_parts.append(f"Truthfulness: {label.strip()}.")
 
+            fact_check = preclassification_data.get("fact_check_assessment")
+            if isinstance(fact_check, dict):
+                label = fact_check.get("label")
+                confidence = fact_check.get("confidence_score")
+                if isinstance(label, str) and label.strip():
+                    if isinstance(confidence, (int, float)):
+                        summary_parts.append(
+                            f"Fact-check estimate: {label.strip()} at {float(confidence):.2f} confidence."
+                        )
+                    else:
+                        summary_parts.append(f"Fact-check estimate: {label.strip()}.")
+
+            aggression = preclassification_data.get("aggression_assessment")
+            if isinstance(aggression, dict):
+                label = aggression.get("label")
+                confidence = aggression.get("confidence_score")
+                if isinstance(label, str) and label.strip():
+                    if isinstance(confidence, (int, float)):
+                        summary_parts.append(
+                            f"Aggression estimate: {label.strip()} at {float(confidence):.2f} confidence."
+                        )
+                    else:
+                        summary_parts.append(f"Aggression estimate: {label.strip()}.")
+
+            social = preclassification_data.get("social_score_assessment")
+            if isinstance(social, dict):
+                label = social.get("composite_label")
+                score = social.get("composite_social_score")
+                if isinstance(label, str) and label.strip():
+                    if isinstance(score, (int, float)):
+                        summary_parts.append(
+                            f"Composite social score: {label.strip()} at {float(score):.2f}."
+                        )
+                    else:
+                        summary_parts.append(
+                            f"Composite social score: {label.strip()}."
+                        )
+
+            contemporary = preclassification_data.get(
+                "contemporary_alignment_assessment"
+            )
+            if isinstance(contemporary, dict):
+                label = contemporary.get("label")
+                confidence = contemporary.get("confidence_score")
+                if isinstance(label, str) and label.strip():
+                    if isinstance(confidence, (int, float)):
+                        summary_parts.append(
+                            f"Contemporary alignment: {label.strip()} at {float(confidence):.2f} confidence."
+                        )
+                    else:
+                        summary_parts.append(
+                            f"Contemporary alignment: {label.strip()}."
+                        )
+
+            propaganda = preclassification_data.get("propaganda_assessment")
+            if isinstance(propaganda, dict):
+                label = propaganda.get("label")
+                confidence = propaganda.get("confidence_score")
+                if isinstance(label, str) and label.strip():
+                    if isinstance(confidence, (int, float)):
+                        summary_parts.append(
+                            f"Propaganda alignment: {label.strip()} at {float(confidence):.2f} confidence."
+                        )
+                    else:
+                        summary_parts.append(f"Propaganda alignment: {label.strip()}.")
+
             style = preclassification_data.get("interaction_style_assessment")
             if isinstance(style, dict):
                 style_labels: list[str] = []
@@ -998,6 +1210,45 @@ class VideoGenerationPipeline:
                                 summary_parts.append(
                                     f"Primary sentiment: {sentiment.strip()}."
                                 )
+
+            communication_metrics = preclassification_data.get("communication_metrics")
+            if isinstance(communication_metrics, dict):
+                profanity_per_sentence_ratio = communication_metrics.get(
+                    "profanity_per_sentence_ratio"
+                )
+                if isinstance(profanity_per_sentence_ratio, (int, float)):
+                    summary_parts.append(
+                        "Profanity per sentence ratio: "
+                        f"{float(profanity_per_sentence_ratio):.4f}."
+                    )
+
+                profanity_to_non_profanity_ratio = communication_metrics.get(
+                    "profanity_to_non_profanity_ratio"
+                )
+                if isinstance(profanity_to_non_profanity_ratio, (int, float)):
+                    summary_parts.append(
+                        "Profanity to non-profanity ratio: "
+                        f"{float(profanity_to_non_profanity_ratio):.4f}."
+                    )
+
+                sentence_complexity_score = communication_metrics.get(
+                    "sentence_complexity_score"
+                )
+                sentence_complexity_label = communication_metrics.get(
+                    "sentence_complexity_label"
+                )
+                if isinstance(sentence_complexity_score, (int, float)):
+                    if isinstance(sentence_complexity_label, str) and sentence_complexity_label.strip():
+                        summary_parts.append(
+                            "Sentence complexity: "
+                            f"{sentence_complexity_label.strip()} at "
+                            f"{float(sentence_complexity_score):.4f}."
+                        )
+                    else:
+                        summary_parts.append(
+                            "Sentence complexity score: "
+                            f"{float(sentence_complexity_score):.4f}."
+                        )
 
         summary_parts.append("End diagnostic summary.")
         return " ".join(summary_parts)
@@ -1109,134 +1360,31 @@ class VideoGenerationPipeline:
         )
         resolved_video_prompt = video_prompt_plan.video_prompt
         manifest["video_prompt"] = resolved_video_prompt
-        manifest["video_prompt_preclassification"] = (
-            {
-                "mood": video_prompt_plan.preclassification.mood,
-                "has_foul_language": video_prompt_plan.preclassification.has_foul_language,
-                "word_count": video_prompt_plan.preclassification.word_count,
-                "sentence_count": video_prompt_plan.preclassification.sentence_count,
-                "truthfulness_assessment": {
-                    "label": video_prompt_plan.preclassification.truthfulness_assessment.label,
-                    "confidence_score": video_prompt_plan.preclassification.truthfulness_assessment.confidence_score,
-                    "reason": video_prompt_plan.preclassification.truthfulness_assessment.reason,
-                },
-                "interaction_style_assessment": {
-                    "formality": {
-                        "label": video_prompt_plan.preclassification.interaction_style_assessment.formality.label,
-                        "confidence_score": video_prompt_plan.preclassification.interaction_style_assessment.formality.confidence_score,
-                        "reason": video_prompt_plan.preclassification.interaction_style_assessment.formality.reason,
-                    },
-                    "certainty_hedging": {
-                        "label": video_prompt_plan.preclassification.interaction_style_assessment.certainty_hedging.label,
-                        "confidence_score": video_prompt_plan.preclassification.interaction_style_assessment.certainty_hedging.confidence_score,
-                        "reason": video_prompt_plan.preclassification.interaction_style_assessment.certainty_hedging.reason,
-                    },
-                    "persuasion_intent": {
-                        "label": video_prompt_plan.preclassification.interaction_style_assessment.persuasion_intent.label,
-                        "confidence_score": video_prompt_plan.preclassification.interaction_style_assessment.persuasion_intent.confidence_score,
-                        "reason": video_prompt_plan.preclassification.interaction_style_assessment.persuasion_intent.reason,
-                    },
-                    "claim_density": {
-                        "label": video_prompt_plan.preclassification.interaction_style_assessment.claim_density.label,
-                        "confidence_score": video_prompt_plan.preclassification.interaction_style_assessment.claim_density.confidence_score,
-                        "reason": video_prompt_plan.preclassification.interaction_style_assessment.claim_density.reason,
-                    },
-                    "speaker_sentiment": [
-                        {
-                            "speaker": item.speaker,
-                            "sentiment": item.sentiment,
-                            "confidence_score": item.confidence_score,
-                            "reason": item.reason,
-                        }
-                        for item in video_prompt_plan.preclassification.interaction_style_assessment.speaker_sentiment
-                    ],
-                },
-                **(
-                    {
-                        "conversation_insights": {
-                            "conversation_type": {
-                                "label": video_prompt_plan.preclassification.conversation_insights.conversation_type.label,
-                                "confidence_score": video_prompt_plan.preclassification.conversation_insights.conversation_type.confidence_score,
-                                "reason": video_prompt_plan.preclassification.conversation_insights.conversation_type.reason,
-                            },
-                            "primary_goal": {
-                                "label": video_prompt_plan.preclassification.conversation_insights.primary_goal.label,
-                                "confidence_score": video_prompt_plan.preclassification.conversation_insights.primary_goal.confidence_score,
-                                "reason": video_prompt_plan.preclassification.conversation_insights.primary_goal.reason,
-                            },
-                            "participant_dynamic": {
-                                "label": video_prompt_plan.preclassification.conversation_insights.participant_dynamic.label,
-                                "confidence_score": video_prompt_plan.preclassification.conversation_insights.participant_dynamic.confidence_score,
-                                "reason": video_prompt_plan.preclassification.conversation_insights.participant_dynamic.reason,
-                            },
-                            "decision_signal": {
-                                "label": video_prompt_plan.preclassification.conversation_insights.decision_signal.label,
-                                "confidence_score": video_prompt_plan.preclassification.conversation_insights.decision_signal.confidence_score,
-                                "reason": video_prompt_plan.preclassification.conversation_insights.decision_signal.reason,
-                            },
-                            "conflict_level": {
-                                "label": video_prompt_plan.preclassification.conversation_insights.conflict_level.label,
-                                "confidence_score": video_prompt_plan.preclassification.conversation_insights.conflict_level.confidence_score,
-                                "reason": video_prompt_plan.preclassification.conversation_insights.conflict_level.reason,
-                            },
-                            "concise_summary": video_prompt_plan.preclassification.conversation_insights.concise_summary,
-                        }
-                    }
-                    if video_prompt_plan.preclassification.conversation_insights
-                    is not None
-                    else {}
-                ),
-                **(
-                    {
-                        "communication_metrics": {
-                            "profanity_word_count": video_prompt_plan.preclassification.communication_metrics.profanity_word_count,
-                            "profanity_rate": video_prompt_plan.preclassification.communication_metrics.profanity_rate,
-                            "words_per_minute": video_prompt_plan.preclassification.communication_metrics.words_per_minute,
-                            "average_words_per_sentence": video_prompt_plan.preclassification.communication_metrics.average_words_per_sentence,
-                            "communication_capability_score": video_prompt_plan.preclassification.communication_metrics.communication_capability_score,
-                            "communication_capability_label": video_prompt_plan.preclassification.communication_metrics.communication_capability_label,
-                            "communication_notes": video_prompt_plan.preclassification.communication_metrics.communication_notes,
-                        }
-                    }
-                    if video_prompt_plan.preclassification.communication_metrics
-                    is not None
-                    else {}
-                ),
-                **(
-                    {
-                        "ensemble_scorecard": {
-                            "weighted_risk_score": video_prompt_plan.preclassification.ensemble_scorecard.weighted_risk_score,
-                            "risk_level": video_prompt_plan.preclassification.ensemble_scorecard.risk_level,
-                            "recommended_visual_intensity": video_prompt_plan.preclassification.ensemble_scorecard.recommended_visual_intensity,
-                            "signals": [
-                                {
-                                    "source": signal.source,
-                                    "model": signal.model,
-                                    "label": signal.label,
-                                    "confidence_score": signal.confidence_score,
-                                    "normalized_risk": signal.normalized_risk,
-                                    "weight": signal.weight,
-                                    "reason": signal.reason,
-                                }
-                                for signal in video_prompt_plan.preclassification.ensemble_scorecard.signals
-                            ],
-                            "warnings": video_prompt_plan.preclassification.ensemble_scorecard.warnings,
-                        }
-                    }
-                    if video_prompt_plan.preclassification.ensemble_scorecard
-                    is not None
-                    else {}
-                ),
-            }
-            if video_prompt_plan.preclassification is not None
-            else None
+        manifest["video_prompt_preclassification"] = self._serialize_preclassification(
+            video_prompt_plan.preclassification
         )
+        analysis_summary_path = self._write_analysis_summary_artifact(
+            run_dir=run_dir,
+            narration_text=narration_text,
+            video_prompt=resolved_video_prompt,
+            preclassification=manifest.get("video_prompt_preclassification"),
+        )
+        if analysis_summary_path is not None:
+            manifest["analysis_summary"] = {
+                "path": str(analysis_summary_path),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            }
         if (
             view_preclassification
             and manifest.get("video_prompt_preclassification") is not None
         ):
             self._status(
-                "🔍 Pre-classification:\n"
+                f"🔬 High-fidelity analysis summary: {analysis_summary_path}\n"
+                + self._format_preclassification_rollup(
+                    manifest.get("video_prompt_preclassification")
+                )
+                + "\n"
+                + "🔍 Pre-classification:\n"
                 + json.dumps(manifest["video_prompt_preclassification"], indent=2)
             )
         manifest["status"] = "planning_scenes"
@@ -1604,7 +1752,14 @@ class VideoGenerationPipeline:
         duration_seconds: float | None = None,
     ) -> VideoPromptPlan:
         if video_prompt:
-            return VideoPromptPlan(video_prompt=video_prompt, preclassification=None)
+            self._status("🧪 Preclassifying transcript for visual planning")
+            preclass_plan = self._planner.generate_video_prompt_plan(
+                narration_text=narration_text, duration_seconds=duration_seconds
+            )
+            return VideoPromptPlan(
+                video_prompt=video_prompt,
+                preclassification=preclass_plan.preclassification,
+            )
         if generate_video_prompt:
             self._status("🧪 Preclassifying transcript for visual planning")
             self._status("🪄 Generating video prompt from narration")
@@ -1614,6 +1769,165 @@ class VideoGenerationPipeline:
         raise ValueError(
             "video_prompt is required unless generate_video_prompt is enabled"
         )
+
+    def _serialize_preclassification(
+        self, preclassification: object
+    ) -> dict[str, object] | None:
+        if preclassification is None:
+            return None
+
+        payload: dict[str, object] = {
+            "mood": preclassification.mood,
+            "has_foul_language": preclassification.has_foul_language,
+            "word_count": preclassification.word_count,
+            "sentence_count": preclassification.sentence_count,
+            "truthfulness_assessment": {
+                "label": preclassification.truthfulness_assessment.label,
+                "confidence_score": preclassification.truthfulness_assessment.confidence_score,
+                "reason": preclassification.truthfulness_assessment.reason,
+            },
+            "interaction_style_assessment": {
+                "formality": {
+                    "label": preclassification.interaction_style_assessment.formality.label,
+                    "confidence_score": preclassification.interaction_style_assessment.formality.confidence_score,
+                    "reason": preclassification.interaction_style_assessment.formality.reason,
+                },
+                "certainty_hedging": {
+                    "label": preclassification.interaction_style_assessment.certainty_hedging.label,
+                    "confidence_score": preclassification.interaction_style_assessment.certainty_hedging.confidence_score,
+                    "reason": preclassification.interaction_style_assessment.certainty_hedging.reason,
+                },
+                "persuasion_intent": {
+                    "label": preclassification.interaction_style_assessment.persuasion_intent.label,
+                    "confidence_score": preclassification.interaction_style_assessment.persuasion_intent.confidence_score,
+                    "reason": preclassification.interaction_style_assessment.persuasion_intent.reason,
+                },
+                "claim_density": {
+                    "label": preclassification.interaction_style_assessment.claim_density.label,
+                    "confidence_score": preclassification.interaction_style_assessment.claim_density.confidence_score,
+                    "reason": preclassification.interaction_style_assessment.claim_density.reason,
+                },
+                "speaker_sentiment": [
+                    {
+                        "speaker": item.speaker,
+                        "sentiment": item.sentiment,
+                        "confidence_score": item.confidence_score,
+                        "reason": item.reason,
+                    }
+                    for item in preclassification.interaction_style_assessment.speaker_sentiment
+                ],
+            },
+        }
+
+        if preclassification.fact_check_assessment is not None:
+            payload["fact_check_assessment"] = {
+                "label": preclassification.fact_check_assessment.label,
+                "confidence_score": preclassification.fact_check_assessment.confidence_score,
+                "reason": preclassification.fact_check_assessment.reason,
+            }
+        if preclassification.aggression_assessment is not None:
+            payload["aggression_assessment"] = {
+                "label": preclassification.aggression_assessment.label,
+                "confidence_score": preclassification.aggression_assessment.confidence_score,
+                "reason": preclassification.aggression_assessment.reason,
+            }
+        if preclassification.social_score_assessment is not None:
+            payload["social_score_assessment"] = {
+                "prosocial_antisocial": {
+                    "label": preclassification.social_score_assessment.prosocial_antisocial.label,
+                    "confidence_score": preclassification.social_score_assessment.prosocial_antisocial.confidence_score,
+                    "reason": preclassification.social_score_assessment.prosocial_antisocial.reason,
+                },
+                "cohesion_divisiveness": {
+                    "label": preclassification.social_score_assessment.cohesion_divisiveness.label,
+                    "confidence_score": preclassification.social_score_assessment.cohesion_divisiveness.confidence_score,
+                    "reason": preclassification.social_score_assessment.cohesion_divisiveness.reason,
+                },
+                "norm_alignment": {
+                    "label": preclassification.social_score_assessment.norm_alignment.label,
+                    "confidence_score": preclassification.social_score_assessment.norm_alignment.confidence_score,
+                    "reason": preclassification.social_score_assessment.norm_alignment.reason,
+                },
+                "composite_social_score": preclassification.social_score_assessment.composite_social_score,
+                "composite_label": preclassification.social_score_assessment.composite_label,
+                "reason": preclassification.social_score_assessment.reason,
+            }
+        if preclassification.contemporary_alignment_assessment is not None:
+            payload["contemporary_alignment_assessment"] = {
+                "label": preclassification.contemporary_alignment_assessment.label,
+                "confidence_score": preclassification.contemporary_alignment_assessment.confidence_score,
+                "reason": preclassification.contemporary_alignment_assessment.reason,
+            }
+        if preclassification.propaganda_assessment is not None:
+            payload["propaganda_assessment"] = {
+                "label": preclassification.propaganda_assessment.label,
+                "confidence_score": preclassification.propaganda_assessment.confidence_score,
+                "reason": preclassification.propaganda_assessment.reason,
+            }
+        if preclassification.conversation_insights is not None:
+            payload["conversation_insights"] = {
+                "conversation_type": {
+                    "label": preclassification.conversation_insights.conversation_type.label,
+                    "confidence_score": preclassification.conversation_insights.conversation_type.confidence_score,
+                    "reason": preclassification.conversation_insights.conversation_type.reason,
+                },
+                "primary_goal": {
+                    "label": preclassification.conversation_insights.primary_goal.label,
+                    "confidence_score": preclassification.conversation_insights.primary_goal.confidence_score,
+                    "reason": preclassification.conversation_insights.primary_goal.reason,
+                },
+                "participant_dynamic": {
+                    "label": preclassification.conversation_insights.participant_dynamic.label,
+                    "confidence_score": preclassification.conversation_insights.participant_dynamic.confidence_score,
+                    "reason": preclassification.conversation_insights.participant_dynamic.reason,
+                },
+                "decision_signal": {
+                    "label": preclassification.conversation_insights.decision_signal.label,
+                    "confidence_score": preclassification.conversation_insights.decision_signal.confidence_score,
+                    "reason": preclassification.conversation_insights.decision_signal.reason,
+                },
+                "conflict_level": {
+                    "label": preclassification.conversation_insights.conflict_level.label,
+                    "confidence_score": preclassification.conversation_insights.conflict_level.confidence_score,
+                    "reason": preclassification.conversation_insights.conflict_level.reason,
+                },
+                "concise_summary": preclassification.conversation_insights.concise_summary,
+            }
+        if preclassification.communication_metrics is not None:
+            payload["communication_metrics"] = {
+                "profanity_word_count": preclassification.communication_metrics.profanity_word_count,
+                "profanity_rate": preclassification.communication_metrics.profanity_rate,
+                "profanity_per_sentence_ratio": preclassification.communication_metrics.profanity_per_sentence_ratio,
+                "profanity_to_non_profanity_ratio": preclassification.communication_metrics.profanity_to_non_profanity_ratio,
+                "words_per_minute": preclassification.communication_metrics.words_per_minute,
+                "average_words_per_sentence": preclassification.communication_metrics.average_words_per_sentence,
+                "sentence_complexity_score": preclassification.communication_metrics.sentence_complexity_score,
+                "sentence_complexity_label": preclassification.communication_metrics.sentence_complexity_label,
+                "communication_capability_score": preclassification.communication_metrics.communication_capability_score,
+                "communication_capability_label": preclassification.communication_metrics.communication_capability_label,
+                "communication_notes": preclassification.communication_metrics.communication_notes,
+            }
+        if preclassification.ensemble_scorecard is not None:
+            payload["ensemble_scorecard"] = {
+                "weighted_risk_score": preclassification.ensemble_scorecard.weighted_risk_score,
+                "risk_level": preclassification.ensemble_scorecard.risk_level,
+                "recommended_visual_intensity": preclassification.ensemble_scorecard.recommended_visual_intensity,
+                "signals": [
+                    {
+                        "source": signal.source,
+                        "model": signal.model,
+                        "label": signal.label,
+                        "confidence_score": signal.confidence_score,
+                        "normalized_risk": signal.normalized_risk,
+                        "weight": signal.weight,
+                        "reason": signal.reason,
+                    }
+                    for signal in preclassification.ensemble_scorecard.signals
+                ],
+                "warnings": preclassification.ensemble_scorecard.warnings,
+            }
+
+        return payload
 
     def _ensure_video_dependencies(self) -> None:
         missing = [
@@ -2197,6 +2511,103 @@ class VideoGenerationPipeline:
         (run_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2), encoding="utf-8"
         )
+
+    def _write_analysis_summary_artifact(
+        self,
+        *,
+        run_dir: Path,
+        narration_text: str,
+        video_prompt: str,
+        preclassification: object,
+    ) -> Path | None:
+        if not isinstance(preclassification, dict):
+            return None
+
+        summary_path = run_dir / "analysis_summary.json"
+        sentence_count = 0
+        if narration_text.strip():
+            sentence_count = len(
+                [
+                    part
+                    for part in re.split(r"(?<=[.!?])\s+", narration_text.strip())
+                    if part.strip()
+                ]
+            )
+
+        summary_payload = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "narration": {
+                "word_count": len(narration_text.split()),
+                "sentence_count": sentence_count,
+                "excerpt": narration_text[:280].strip(),
+            },
+            "video_prompt": video_prompt,
+            "preclassification": preclassification,
+            "dimensions": {
+                "truthfulness": preclassification.get("truthfulness_assessment"),
+                "fact_check": preclassification.get("fact_check_assessment"),
+                "aggression": preclassification.get("aggression_assessment"),
+                "social_score": preclassification.get("social_score_assessment"),
+                "contemporary_alignment": preclassification.get(
+                    "contemporary_alignment_assessment"
+                ),
+                "propaganda_alignment": preclassification.get("propaganda_assessment"),
+                "interaction_style": preclassification.get(
+                    "interaction_style_assessment"
+                ),
+                "conversation_insights": preclassification.get("conversation_insights"),
+                "communication_metrics": preclassification.get("communication_metrics"),
+                "ensemble_scorecard": preclassification.get("ensemble_scorecard"),
+            },
+        }
+        summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
+        return summary_path
+
+    def _format_preclassification_rollup(self, preclassification: object) -> str:
+        if not isinstance(preclassification, dict):
+            return ""
+
+        lines = ["High-fidelity rollup:"]
+        for key, title in (
+            ("truthfulness_assessment", "Truthfulness"),
+            ("fact_check_assessment", "Fact-check"),
+            ("aggression_assessment", "Aggression"),
+            ("contemporary_alignment_assessment", "Contemporary alignment"),
+            ("propaganda_assessment", "Propaganda alignment"),
+        ):
+            item = preclassification.get(key)
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label", "")).strip()
+            confidence = item.get("confidence_score")
+            if not label:
+                continue
+            line = f"- {title}: {label}"
+            if isinstance(confidence, (int, float)):
+                line += f" ({float(confidence):.2f})"
+            lines.append(line)
+
+        social = preclassification.get("social_score_assessment")
+        if isinstance(social, dict):
+            label = str(social.get("composite_label", "")).strip()
+            score = social.get("composite_social_score")
+            if label:
+                line = f"- Social score: {label}"
+                if isinstance(score, (int, float)):
+                    line += f" ({float(score):.2f})"
+                lines.append(line)
+
+        ensemble = preclassification.get("ensemble_scorecard")
+        if isinstance(ensemble, dict):
+            risk_level = str(ensemble.get("risk_level", "")).strip()
+            weighted = ensemble.get("weighted_risk_score")
+            if risk_level:
+                line = f"- Ensemble risk: {risk_level}"
+                if isinstance(weighted, (int, float)):
+                    line += f" ({float(weighted):.2f})"
+                lines.append(line)
+
+        return "\n".join(lines)
 
     def _load_scenes_from_manifest(self, manifest: dict[str, object]) -> list[Scene]:
         raw_scenes = manifest.get("scenes")

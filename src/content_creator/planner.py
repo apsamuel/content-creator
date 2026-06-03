@@ -35,6 +35,11 @@ class VideoPromptPreclassification:
     sentence_count: int
     truthfulness_assessment: "TranscriptAssessment"
     interaction_style_assessment: "InteractionStyleAssessment"
+    fact_check_assessment: "TranscriptAssessment | None" = None
+    aggression_assessment: "TranscriptAssessment | None" = None
+    social_score_assessment: "SocialScoreAssessment | None" = None
+    contemporary_alignment_assessment: "TranscriptAssessment | None" = None
+    propaganda_assessment: "TranscriptAssessment | None" = None
     conversation_insights: "ConversationInsights | None" = None
     communication_metrics: "CommunicationMetrics | None" = None
     ensemble_scorecard: "PreclassificationEnsembleScorecard | None" = None
@@ -95,11 +100,25 @@ class ConversationInsights:
 
 
 @dataclass(slots=True)
+class SocialScoreAssessment:
+    prosocial_antisocial: TranscriptAssessment
+    cohesion_divisiveness: TranscriptAssessment
+    norm_alignment: TranscriptAssessment
+    composite_social_score: float
+    composite_label: str
+    reason: str
+
+
+@dataclass(slots=True)
 class CommunicationMetrics:
     profanity_word_count: int
     profanity_rate: float
+    profanity_per_sentence_ratio: float
+    profanity_to_non_profanity_ratio: float
     words_per_minute: float | None
     average_words_per_sentence: float
+    sentence_complexity_score: float
+    sentence_complexity_label: str
     communication_capability_score: float
     communication_capability_label: str
     communication_notes: str
@@ -217,6 +236,11 @@ class ScenePlanner:
         (
             truthfulness_assessment,
             interaction_style_assessment,
+            fact_check_assessment,
+            aggression_assessment,
+            social_score_assessment,
+            contemporary_alignment_assessment,
+            propaganda_assessment,
             conversation_insights,
         ) = self._classify_analysis(
             narration_text=narration_text, prompt=analysis_prompt
@@ -237,6 +261,11 @@ class ScenePlanner:
             sentence_count=self._count_sentences(narration_text),
             truthfulness_assessment=truthfulness_assessment,
             interaction_style_assessment=interaction_style_assessment,
+            fact_check_assessment=fact_check_assessment,
+            aggression_assessment=aggression_assessment,
+            social_score_assessment=social_score_assessment,
+            contemporary_alignment_assessment=contemporary_alignment_assessment,
+            propaganda_assessment=propaganda_assessment,
             conversation_insights=conversation_insights,
             communication_metrics=self._build_communication_metrics(
                 narration_text=narration_text,
@@ -250,6 +279,11 @@ class ScenePlanner:
                 has_foul_language=has_foul_language,
                 truthfulness_assessment=truthfulness_assessment,
                 interaction_style_assessment=interaction_style_assessment,
+                fact_check_assessment=fact_check_assessment,
+                aggression_assessment=aggression_assessment,
+                social_score_assessment=social_score_assessment,
+                contemporary_alignment_assessment=contemporary_alignment_assessment,
+                propaganda_assessment=propaganda_assessment,
             ),
         )
         return VideoPromptPlan(
@@ -263,11 +297,30 @@ class ScenePlanner:
 
     def _classify_analysis(
         self, *, narration_text: str, prompt: str | None = None
-    ) -> tuple[TranscriptAssessment, InteractionStyleAssessment, ConversationInsights]:
+    ) -> tuple[
+        TranscriptAssessment,
+        InteractionStyleAssessment,
+        TranscriptAssessment,
+        TranscriptAssessment,
+        SocialScoreAssessment,
+        TranscriptAssessment,
+        TranscriptAssessment,
+        ConversationInsights,
+    ]:
         if prompt is None:
             prompt = self._build_analysis_prompt(narration_text=narration_text)
-        raw = self._llm.generate_text(prompt)
-        payload = self._extract_json(raw)
+        payload: dict[str, Any] = {}
+        active_prompt = prompt
+        for _attempt in range(2):
+            raw = self._llm.generate_text(active_prompt)
+            payload = self._normalize_analysis_payload(self._extract_json(raw))
+            if self._has_core_analysis_fields(payload):
+                break
+            active_prompt = (
+                f"{prompt}\n\n"
+                "IMPORTANT: Return ONLY a single valid JSON object matching the schema. "
+                "Do not include markdown, code fences, commentary, or extra text."
+            )
 
         truthfulness_assessment = self._parse_dimension_assessment(
             payload.get("truthfulness"),
@@ -319,14 +372,128 @@ class ScenePlanner:
                 payload.get("speaker_sentiment")
             ),
         )
+        fact_check_assessment = self._parse_dimension_assessment(
+            payload.get("fact_check"),
+            allowed_labels={
+                "LikelyAccurate",
+                "MixedOrNeedsEvidence",
+                "LikelyInaccurate",
+            },
+            fallback_reason=(
+                "Fact-check estimate is transcript-only and should not be treated as external verification."
+            ),
+            default_label="MixedOrNeedsEvidence",
+        )
+        aggression_assessment = self._parse_dimension_assessment(
+            payload.get("aggression"),
+            allowed_labels={"High", "Moderate", "Low"},
+            fallback_reason=(
+                "Aggression estimate is based on tone and wording in the transcript only."
+            ),
+            default_label="Low",
+        )
+        social_score_assessment = self._parse_social_score_assessment(
+            payload.get("social_score")
+        )
+        contemporary_alignment_assessment = self._parse_dimension_assessment(
+            payload.get("contemporary_alignment"),
+            allowed_labels={"Aligned", "PartiallyAligned", "Misaligned"},
+            fallback_reason=(
+                "Contemporary-alignment estimate is based on general consensus framing inferred from transcript wording only."
+            ),
+            default_label="PartiallyAligned",
+        )
+        propaganda_assessment = self._parse_dimension_assessment(
+            payload.get("propaganda_alignment"),
+            allowed_labels={"High", "Moderate", "Low"},
+            fallback_reason=(
+                "Propaganda-alignment estimate is based on rhetorical patterns in the transcript only."
+            ),
+            default_label="Low",
+        )
         conversation_insights = self._parse_conversation_insights(
             payload.get("conversation_insights")
         )
         return (
             truthfulness_assessment,
             interaction_style_assessment,
+            fact_check_assessment,
+            aggression_assessment,
+            social_score_assessment,
+            contemporary_alignment_assessment,
+            propaganda_assessment,
             conversation_insights,
         )
+
+    def _has_core_analysis_fields(self, payload: dict[str, Any]) -> bool:
+        return any(
+            isinstance(payload.get(key), dict)
+            for key in (
+                "truthfulness",
+                "fact_check",
+                "formality",
+                "certainty_hedging",
+                "persuasion_intent",
+                "claim_density",
+            )
+        )
+
+    def _normalize_analysis_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not payload:
+            return payload
+
+        normalized = dict(payload)
+
+        # Accept alternative field naming variants used by some models or prior schemas.
+        if not isinstance(normalized.get("truthfulness"), dict):
+            alt_truth = normalized.get("truthfulness_assessment")
+            if isinstance(alt_truth, dict):
+                normalized["truthfulness"] = alt_truth
+
+        if not isinstance(normalized.get("fact_check"), dict):
+            for alias in ("fact_checking", "fact_check_assessment"):
+                alt_fact = normalized.get(alias)
+                if isinstance(alt_fact, dict):
+                    normalized["fact_check"] = alt_fact
+                    break
+
+        if not isinstance(normalized.get("aggression"), dict):
+            alt_aggression = normalized.get("aggression_assessment")
+            if isinstance(alt_aggression, dict):
+                normalized["aggression"] = alt_aggression
+
+        if not isinstance(normalized.get("contemporary_alignment"), dict):
+            alt_contemporary = normalized.get("contemporary_alignment_assessment")
+            if isinstance(alt_contemporary, dict):
+                normalized["contemporary_alignment"] = alt_contemporary
+
+        if not isinstance(normalized.get("propaganda_alignment"), dict):
+            alt_propaganda = normalized.get("propaganda_assessment")
+            if isinstance(alt_propaganda, dict):
+                normalized["propaganda_alignment"] = alt_propaganda
+
+        if not isinstance(normalized.get("social_score"), dict):
+            alt_social = normalized.get("social_score_assessment")
+            if isinstance(alt_social, dict):
+                normalized["social_score"] = alt_social
+
+        if not isinstance(normalized.get("speaker_sentiment"), list):
+            style = normalized.get("interaction_style_assessment")
+            if isinstance(style, dict):
+                for field in (
+                    "formality",
+                    "certainty_hedging",
+                    "persuasion_intent",
+                    "claim_density",
+                ):
+                    if not isinstance(normalized.get(field), dict) and isinstance(
+                        style.get(field), dict
+                    ):
+                        normalized[field] = style.get(field)
+                if isinstance(style.get("speaker_sentiment"), list):
+                    normalized["speaker_sentiment"] = style.get("speaker_sentiment")
+
+        return normalized
 
     def build_scenes(
         self,
@@ -656,6 +823,18 @@ You analyze the truthfulness and interaction style of a transcript.
 Return valid JSON only with this exact schema:
 {{
     "truthfulness": {{"label": "LikelyTruthful|MixedOrUnverifiable|LikelyMisleading", "confidence_score": 0.0, "reason": "short explanation"}},
+    "fact_check": {{"label": "LikelyAccurate|MixedOrNeedsEvidence|LikelyInaccurate", "confidence_score": 0.0, "reason": "short explanation"}},
+    "aggression": {{"label": "High|Moderate|Low", "confidence_score": 0.0, "reason": "short explanation"}},
+    "social_score": {{
+        "prosocial_antisocial": {{"label": "ProSocial|Balanced|AntiSocial", "confidence_score": 0.0, "reason": "short explanation"}},
+        "cohesion_divisiveness": {{"label": "Cohesive|Mixed|Divisive", "confidence_score": 0.0, "reason": "short explanation"}},
+        "norm_alignment": {{"label": "Aligned|Mixed|Misaligned", "confidence_score": 0.0, "reason": "short explanation"}},
+        "composite_social_score": 0.0,
+        "composite_label": "ProSocial|Mixed|AntiSocial",
+        "reason": "short explanation"
+    }},
+    "contemporary_alignment": {{"label": "Aligned|PartiallyAligned|Misaligned", "confidence_score": 0.0, "reason": "short explanation"}},
+    "propaganda_alignment": {{"label": "High|Moderate|Low", "confidence_score": 0.0, "reason": "short explanation"}},
     "formality": {{"label": "Formal|Mixed|Informal", "confidence_score": 0.0, "reason": "short explanation"}},
     "certainty_hedging": {{"label": "Confident|Balanced|HeavilyHedged", "confidence_score": 0.0, "reason": "short explanation"}},
     "persuasion_intent": {{"label": "Strong|Moderate|LowOrNone", "confidence_score": 0.0, "reason": "short explanation"}},
@@ -676,6 +855,12 @@ Truthfulness constraints:
 - Use LikelyTruthful when the transcript is internally consistent, cautious, and avoids unsupported certainty.
 - Use MixedOrUnverifiable when claims cannot be checked from the transcript or contain a mix of grounded and ungrounded statements.
 - Use LikelyMisleading when the transcript contains strong unsupported certainty, internal contradictions, or obvious rhetorical manipulation.
+
+Fact-check and social constraints:
+- fact_check must estimate claim accuracy confidence from transcript-internal evidence only.
+- social_score must report all sub-dimensions and a composite score between 0 and 1.
+- contemporary_alignment should use broad non-domain-specific contemporary consensus framing inferred from transcript language.
+- propaganda_alignment should estimate persuasive propaganda-like framing strength from rhetorical patterns only.
 
 Interaction style constraints:
 - Base the answer only on the transcript itself.
@@ -912,6 +1097,101 @@ Transcript:
             concise_summary=summary,
         )
 
+    def _parse_social_score_assessment(self, value: Any) -> SocialScoreAssessment:
+        if not isinstance(value, dict):
+            value = {}
+
+        prosocial_antisocial = self._parse_dimension_assessment(
+            value.get("prosocial_antisocial"),
+            allowed_labels={"ProSocial", "Balanced", "AntiSocial"},
+            fallback_reason=(
+                "Pro-social versus anti-social framing is estimated from transcript wording only."
+            ),
+            default_label="Balanced",
+        )
+        cohesion_divisiveness = self._parse_dimension_assessment(
+            value.get("cohesion_divisiveness"),
+            allowed_labels={"Cohesive", "Mixed", "Divisive"},
+            fallback_reason=(
+                "Cohesion versus divisiveness is estimated from transcript wording only."
+            ),
+            default_label="Mixed",
+        )
+        norm_alignment = self._parse_dimension_assessment(
+            value.get("norm_alignment"),
+            allowed_labels={"Aligned", "Mixed", "Misaligned"},
+            fallback_reason=(
+                "Norm alignment is estimated from transcript wording only."
+            ),
+            default_label="Mixed",
+        )
+
+        computed_score = self._compute_social_composite_score(
+            prosocial_antisocial=prosocial_antisocial,
+            cohesion_divisiveness=cohesion_divisiveness,
+            norm_alignment=norm_alignment,
+        )
+
+        composite_score = computed_score
+        if isinstance(value, dict) and "composite_social_score" in value:
+            composite_score = self._parse_confidence_score(
+                value.get("composite_social_score")
+            )
+
+        composite_label = "Mixed"
+        if composite_score >= 0.68:
+            composite_label = "ProSocial"
+        elif composite_score < 0.36:
+            composite_label = "AntiSocial"
+
+        label_candidate = self._normalize_fragment(
+            str(value.get("composite_label", ""))
+        )
+        if label_candidate in {"ProSocial", "Mixed", "AntiSocial"}:
+            composite_label = label_candidate
+
+        reason = self._normalize_fragment(str(value.get("reason", "")))
+        if not reason:
+            reason = "Composite social score is aggregated from pro-sociality, cohesion, and norm-alignment transcript signals."
+
+        return SocialScoreAssessment(
+            prosocial_antisocial=prosocial_antisocial,
+            cohesion_divisiveness=cohesion_divisiveness,
+            norm_alignment=norm_alignment,
+            composite_social_score=composite_score,
+            composite_label=composite_label,
+            reason=reason,
+        )
+
+    def _compute_social_composite_score(
+        self,
+        *,
+        prosocial_antisocial: TranscriptAssessment,
+        cohesion_divisiveness: TranscriptAssessment,
+        norm_alignment: TranscriptAssessment,
+    ) -> float:
+        prosocial_score = {"ProSocial": 0.9, "Balanced": 0.5, "AntiSocial": 0.1}.get(
+            prosocial_antisocial.label, 0.5
+        )
+        cohesion_score = {"Cohesive": 0.9, "Mixed": 0.5, "Divisive": 0.1}.get(
+            cohesion_divisiveness.label, 0.5
+        )
+        norm_score = {"Aligned": 0.9, "Mixed": 0.5, "Misaligned": 0.1}.get(
+            norm_alignment.label, 0.5
+        )
+        return max(
+            0.0,
+            min(
+                1.0,
+                round(
+                    (prosocial_score * 0.4)
+                    + (cohesion_score * 0.35)
+                    + (norm_score * 0.25),
+                    4,
+                ),
+            ),
+        )
+
     def _build_ensemble_scorecard(
         self,
         *,
@@ -920,6 +1200,11 @@ Transcript:
         has_foul_language: bool,
         truthfulness_assessment: TranscriptAssessment,
         interaction_style_assessment: InteractionStyleAssessment,
+        fact_check_assessment: TranscriptAssessment | None,
+        aggression_assessment: TranscriptAssessment | None,
+        social_score_assessment: SocialScoreAssessment | None,
+        contemporary_alignment_assessment: TranscriptAssessment | None,
+        propaganda_assessment: TranscriptAssessment | None,
     ) -> PreclassificationEnsembleScorecard:
         if not self._preclassification_ensemble_enabled:
             return PreclassificationEnsembleScorecard(
@@ -941,7 +1226,7 @@ Transcript:
                 label="foul_language" if has_foul_language else "clean_language",
                 confidence_score=1.0,
                 normalized_risk=1.0 if has_foul_language else 0.0,
-                weight=0.08,
+                weight=0.05,
                 reason=(
                     "Transcript-level foul language flag from structured prompt output."
                 ),
@@ -958,7 +1243,7 @@ Transcript:
             narration_text=narration_text,
             model_id=self._safety_primary_model,
             source="model_safety_primary",
-            weight=0.24,
+            weight=0.14,
         )
         if safety_signal_primary is not None:
             signals.append(safety_signal_primary)
@@ -969,7 +1254,7 @@ Transcript:
             narration_text=narration_text,
             model_id=self._safety_secondary_model,
             source="model_safety_secondary",
-            weight=0.16,
+            weight=0.10,
         )
         if safety_signal_secondary is not None:
             signals.append(safety_signal_secondary)
@@ -993,6 +1278,86 @@ Transcript:
             signals.append(intent_signal)
         else:
             warnings.append("Intent model signal unavailable.")
+
+        if fact_check_assessment is not None:
+            signals.append(self._fact_check_signal(fact_check_assessment))
+
+        if aggression_assessment is not None:
+            signals.append(self._aggression_signal(aggression_assessment))
+            aggression_model_signal = self._try_zero_shot_dimension_signal(
+                narration_text=narration_text,
+                model_id=self._preclass_intent_model,
+                source="model_aggression",
+                candidate_labels=[
+                    "high aggression language",
+                    "moderate aggression language",
+                    "low aggression language",
+                ],
+                risk_mapping={
+                    "high aggression language": 0.88,
+                    "moderate aggression language": 0.55,
+                    "low aggression language": 0.15,
+                },
+                weight=0.04,
+                reason="Zero-shot aggression framing signal.",
+            )
+            if aggression_model_signal is not None:
+                signals.append(aggression_model_signal)
+            else:
+                warnings.append("Aggression model signal unavailable.")
+
+        if social_score_assessment is not None:
+            signals.append(self._social_signal(social_score_assessment))
+            social_model_signal = self._try_zero_shot_dimension_signal(
+                narration_text=narration_text,
+                model_id=self._preclass_intent_model,
+                source="model_social",
+                candidate_labels=[
+                    "socially cohesive and prosocial",
+                    "socially divisive or antisocial",
+                    "neutral social framing",
+                ],
+                risk_mapping={
+                    "socially cohesive and prosocial": 0.15,
+                    "socially divisive or antisocial": 0.85,
+                    "neutral social framing": 0.4,
+                },
+                weight=0.03,
+                reason="Zero-shot social cohesion/divisiveness signal.",
+            )
+            if social_model_signal is not None:
+                signals.append(social_model_signal)
+            else:
+                warnings.append("Social model signal unavailable.")
+
+        if contemporary_alignment_assessment is not None:
+            signals.append(
+                self._contemporary_alignment_signal(contemporary_alignment_assessment)
+            )
+
+        if propaganda_assessment is not None:
+            signals.append(self._propaganda_signal(propaganda_assessment))
+            propaganda_model_signal = self._try_zero_shot_dimension_signal(
+                narration_text=narration_text,
+                model_id=self._preclass_intent_model,
+                source="model_propaganda",
+                candidate_labels=[
+                    "contains propaganda-style persuasion",
+                    "rhetorical but not propaganda",
+                    "neutral informative discourse",
+                ],
+                risk_mapping={
+                    "contains propaganda-style persuasion": 0.88,
+                    "rhetorical but not propaganda": 0.55,
+                    "neutral informative discourse": 0.2,
+                },
+                weight=0.03,
+                reason="Zero-shot propaganda-style rhetoric signal.",
+            )
+            if propaganda_model_signal is not None:
+                signals.append(propaganda_model_signal)
+            else:
+                warnings.append("Propaganda model signal unavailable.")
 
         weighted_risk_score = self._weighted_average_risk(signals)
         return PreclassificationEnsembleScorecard(
@@ -1095,7 +1460,7 @@ Transcript:
             label=assessment.label,
             confidence_score=confidence,
             normalized_risk=normalized_risk,
-            weight=0.24,
+            weight=0.14,
             reason=assessment.reason,
         )
 
@@ -1128,10 +1493,144 @@ Transcript:
             label=f"{persuasion_assessment.label}+{claim_density_assessment.label}",
             confidence_score=confidence,
             normalized_risk=normalized_risk,
-            weight=0.12,
+            weight=0.08,
             reason=(
                 "Derived from persuasion intent and claim density assessments in transcript analysis."
             ),
+        )
+
+    def _fact_check_signal(self, assessment: TranscriptAssessment) -> EnsembleSignal:
+        risk_by_label = {
+            "LikelyAccurate": 0.12,
+            "MixedOrNeedsEvidence": 0.55,
+            "LikelyInaccurate": 0.9,
+        }
+        base_risk = risk_by_label.get(assessment.label, 0.55)
+        confidence = max(0.0, min(1.0, assessment.confidence_score))
+        normalized_risk = max(0.0, min(1.0, base_risk * max(0.5, confidence)))
+        return EnsembleSignal(
+            source="llm_fact_check",
+            model="transcript_fact_check_prompt",
+            label=assessment.label,
+            confidence_score=confidence,
+            normalized_risk=normalized_risk,
+            weight=0.10,
+            reason=assessment.reason,
+        )
+
+    def _aggression_signal(self, assessment: TranscriptAssessment) -> EnsembleSignal:
+        risk_by_label = {"High": 0.86, "Moderate": 0.55, "Low": 0.14}
+        confidence = max(0.0, min(1.0, assessment.confidence_score))
+        normalized_risk = max(
+            0.0,
+            min(1.0, risk_by_label.get(assessment.label, 0.4) * max(0.5, confidence)),
+        )
+        return EnsembleSignal(
+            source="llm_aggression",
+            model="transcript_aggression_prompt",
+            label=assessment.label,
+            confidence_score=confidence,
+            normalized_risk=normalized_risk,
+            weight=0.04,
+            reason=assessment.reason,
+        )
+
+    def _social_signal(self, assessment: SocialScoreAssessment) -> EnsembleSignal:
+        confidence = (
+            assessment.prosocial_antisocial.confidence_score
+            + assessment.cohesion_divisiveness.confidence_score
+            + assessment.norm_alignment.confidence_score
+        ) / 3.0
+        normalized_risk = max(
+            0.0,
+            min(1.0, (1.0 - assessment.composite_social_score) * max(0.5, confidence)),
+        )
+        return EnsembleSignal(
+            source="llm_social",
+            model="transcript_social_prompt",
+            label=assessment.composite_label,
+            confidence_score=max(0.0, min(1.0, confidence)),
+            normalized_risk=normalized_risk,
+            weight=0.04,
+            reason=assessment.reason,
+        )
+
+    def _contemporary_alignment_signal(
+        self, assessment: TranscriptAssessment
+    ) -> EnsembleSignal:
+        risk_by_label = {"Aligned": 0.2, "PartiallyAligned": 0.5, "Misaligned": 0.82}
+        confidence = max(0.0, min(1.0, assessment.confidence_score))
+        normalized_risk = max(
+            0.0,
+            min(1.0, risk_by_label.get(assessment.label, 0.5) * max(0.5, confidence)),
+        )
+        return EnsembleSignal(
+            source="llm_contemporary_alignment",
+            model="transcript_contemporary_alignment_prompt",
+            label=assessment.label,
+            confidence_score=confidence,
+            normalized_risk=normalized_risk,
+            weight=0.07,
+            reason=assessment.reason,
+        )
+
+    def _propaganda_signal(self, assessment: TranscriptAssessment) -> EnsembleSignal:
+        risk_by_label = {"High": 0.9, "Moderate": 0.58, "Low": 0.18}
+        confidence = max(0.0, min(1.0, assessment.confidence_score))
+        normalized_risk = max(
+            0.0,
+            min(1.0, risk_by_label.get(assessment.label, 0.45) * max(0.5, confidence)),
+        )
+        return EnsembleSignal(
+            source="llm_propaganda",
+            model="transcript_propaganda_prompt",
+            label=assessment.label,
+            confidence_score=confidence,
+            normalized_risk=normalized_risk,
+            weight=0.04,
+            reason=assessment.reason,
+        )
+
+    def _try_zero_shot_dimension_signal(
+        self,
+        *,
+        narration_text: str,
+        model_id: str,
+        source: str,
+        candidate_labels: list[str],
+        risk_mapping: dict[str, float],
+        weight: float,
+        reason: str,
+    ) -> EnsembleSignal | None:
+        classify = getattr(self._llm, "classify_zero_shot_intent", None)
+        if not callable(classify):
+            return None
+        try:
+            payload = classify(
+                narration_text, candidate_labels=candidate_labels, model=model_id
+            )
+        except Exception:
+            return None
+
+        if not isinstance(payload, dict):
+            return None
+
+        top_label = self._normalize_fragment(str(payload.get("top_label", "")))
+        top_score = self._parse_confidence_score(payload.get("top_score"))
+        label_key = top_label.lower()
+        risk_map_normalized = {
+            key.lower(): value for key, value in risk_mapping.items()
+        }
+        base_risk = risk_map_normalized.get(label_key, 0.4)
+        normalized_risk = max(0.0, min(1.0, base_risk * max(0.5, top_score)))
+        return EnsembleSignal(
+            source=source,
+            model=model_id,
+            label=top_label or "unknown",
+            confidence_score=top_score,
+            normalized_risk=normalized_risk,
+            weight=weight,
+            reason=reason,
         )
 
     def _try_content_safety_signal(
@@ -1197,7 +1696,7 @@ Transcript:
             label=top_label or "unknown",
             confidence_score=top_score,
             normalized_risk=normalized_risk,
-            weight=0.08,
+            weight=0.05,
             reason=reason,
         )
 
@@ -1238,7 +1737,7 @@ Transcript:
             label=top_label or "unknown",
             confidence_score=top_score,
             normalized_risk=normalized_risk,
-            weight=0.08,
+            weight=0.05,
             reason="Zero-shot intent classification over transcript narrative intent labels.",
         )
 
@@ -1360,9 +1859,24 @@ Transcript:
         profanity_rate = (
             round((profanity_word_count / word_count), 4) if word_count > 0 else 0.0
         )
+        profanity_per_sentence_ratio = (
+            round((profanity_word_count / sentence_count), 4)
+            if sentence_count > 0
+            else 0.0
+        )
+        non_profanity_word_count = max(word_count - profanity_word_count, 0)
+        profanity_to_non_profanity_ratio = (
+            round((profanity_word_count / non_profanity_word_count), 4)
+            if non_profanity_word_count > 0
+            else float(profanity_word_count > 0)
+        )
         avg_words_per_sentence = (
             round(word_count / sentence_count, 2) if sentence_count > 0 else 0.0
         )
+        (
+            sentence_complexity_score,
+            sentence_complexity_label,
+        ) = self._compute_sentence_complexity_from_word_lengths(narration_text)
         words_per_minute = None
         if duration_seconds is not None and duration_seconds > 0:
             words_per_minute = round((word_count / duration_seconds) * 60.0, 1)
@@ -1375,12 +1889,35 @@ Transcript:
         return CommunicationMetrics(
             profanity_word_count=profanity_word_count,
             profanity_rate=profanity_rate,
+            profanity_per_sentence_ratio=profanity_per_sentence_ratio,
+            profanity_to_non_profanity_ratio=profanity_to_non_profanity_ratio,
             words_per_minute=words_per_minute,
             average_words_per_sentence=avg_words_per_sentence,
+            sentence_complexity_score=sentence_complexity_score,
+            sentence_complexity_label=sentence_complexity_label,
             communication_capability_score=capability_score,
             communication_capability_label=capability_label,
             communication_notes=notes,
         )
+
+    def _compute_sentence_complexity_from_word_lengths(
+        self, text: str
+    ) -> tuple[float, str]:
+        words = re.findall(r"\b\w+\b", text)
+        if not words:
+            return (0.0, "Simple")
+
+        average_word_length = sum(len(word) for word in words) / len(words)
+        # Normalize average word length into [0, 1] to provide stable scoring.
+        score = round(max(0.0, min(1.0, (average_word_length - 3.0) / 5.0)), 4)
+
+        if score >= 0.67:
+            label = "Complex"
+        elif score >= 0.34:
+            label = "Moderate"
+        else:
+            label = "Simple"
+        return (score, label)
 
     def _count_words(self, text: str) -> int:
         return len(re.findall(r"\b\w+\b", text))
@@ -1490,16 +2027,54 @@ Transcript:
         return normalized
 
     def _extract_json(self, raw: str) -> dict[str, Any]:
-        match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
-        if not match:
+        text = raw.strip()
+        if not text:
             return {}
+
+        # Fast path: response is already pure JSON.
         try:
-            payload = json.loads(match.group(0))
+            payload = json.loads(text)
+            if isinstance(payload, dict):
+                return payload
         except json.JSONDecodeError:
+            pass
+
+        # Common path: JSON wrapped in markdown code fences.
+        fenced_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if fenced_match:
+            try:
+                payload = json.loads(fenced_match.group(1))
+                if isinstance(payload, dict):
+                    return payload
+            except json.JSONDecodeError:
+                pass
+
+        # Recovery path: scan for any decodable JSON object in mixed output.
+        decoder = json.JSONDecoder()
+        candidates: list[dict[str, Any]] = []
+        for match in re.finditer(r"\{", text):
+            start_index = match.start()
+            try:
+                parsed, _end_index = decoder.raw_decode(text[start_index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                candidates.append(parsed)
+
+        if not candidates:
             return {}
-        if not isinstance(payload, dict):
-            return {}
-        return payload
+
+        expected = {
+            "truthfulness",
+            "fact_check",
+            "formality",
+            "certainty_hedging",
+            "persuasion_intent",
+            "claim_density",
+            "speaker_sentiment",
+            "conversation_insights",
+        }
+        return max(candidates, key=lambda item: len(expected.intersection(item.keys())))
 
     def _spread_duration(
         self, total_duration_seconds: float, count: int
