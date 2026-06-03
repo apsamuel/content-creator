@@ -369,6 +369,37 @@ def test_profanity_debug_passes_preclassification_position(
     assert call_kwargs["preclassification_position"] == "append"
 
 
+def test_profanity_debug_passes_feedback_options(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "audio.m4a"
+    audio_file.write_bytes(b"audio")
+    output_file = tmp_path / "debug.m4a"
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "profanity-debug",
+            "--audio-file",
+            str(audio_file),
+            "--output",
+            str(output_file),
+            "--feedback-tier",
+            "expert",
+            "--enhanced-rationale",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    call_kwargs = fake_pipeline.calls[0][2]
+    assert call_kwargs["feedback_tier"] == "expert"
+    assert call_kwargs["enhanced_rationale"] is True
+
+
 def test_global_debug_flag_prints_message(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
 
@@ -1145,6 +1176,34 @@ def test_from_text_passes_image_workers(monkeypatch, tmp_path: Path) -> None:
     assert fake_pipeline.calls[0][2]["image_workers"] == 3
 
 
+def test_from_text_passes_feedback_options(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-text",
+            "--text-transcription",
+            "Narration",
+            "--video-prompt",
+            "Style",
+            "--feedback-tier",
+            "expert",
+            "--enhanced-rationale",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    call_kwargs = fake_pipeline.calls[0][2]
+    assert call_kwargs["feedback_tier"] == "expert"
+    assert call_kwargs["enhanced_rationale"] is True
+
+
 def test_from_audio_passes_image_workers(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
     fake_pipeline = FakePipeline()
@@ -1171,6 +1230,37 @@ def test_from_audio_passes_image_workers(monkeypatch, tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert fake_pipeline.calls[0][2]["image_workers"] == 4
+
+
+def test_from_audio_passes_feedback_options(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    fake_pipeline = FakePipeline()
+
+    monkeypatch.setattr(cli_module, "_build_pipeline", lambda **_kwargs: fake_pipeline)
+
+    audio_file = tmp_path / "input.m4a"
+    audio_file.write_bytes(b"audio")
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "from-audio",
+            "--audio-file",
+            str(audio_file),
+            "--video-prompt",
+            "Style",
+            "--feedback-tier",
+            "minimal",
+            "--enhanced-rationale",
+            "--output",
+            str(tmp_path / "video.mp4"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    call_kwargs = fake_pipeline.calls[0][2]
+    assert call_kwargs["feedback_tier"] == "minimal"
+    assert call_kwargs["enhanced_rationale"] is True
 
 
 def test_from_text_passes_cinematic_transitions(monkeypatch, tmp_path: Path) -> None:

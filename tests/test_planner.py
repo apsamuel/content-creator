@@ -1124,3 +1124,92 @@ def test_build_scenes_leaves_transitions_disabled_by_default() -> None:
 
     assert all(scene.transition_to_next is None for scene in scene_plan.scenes)
     assert all("[TRANSITION:" not in scene.prompt for scene in scene_plan.scenes)
+
+
+def test_generate_feedback_annotations_supports_tiers() -> None:
+    planner = ScenePlanner(StubLLM("{}"))
+    preclassification_data = {
+        "truthfulness_assessment": {
+            "label": "LikelyMisleading",
+            "confidence_score": 0.44,
+            "reason": "Strong claims with limited grounding.",
+        },
+        "fact_check_assessment": {
+            "label": "LikelyInaccurate",
+            "confidence_score": 0.42,
+            "reason": "Conflicts with known framing.",
+        },
+        "aggression_assessment": {
+            "label": "High",
+            "confidence_score": 0.66,
+            "reason": "Hostile language patterns.",
+        },
+        "social_score_assessment": {
+            "composite_label": "AntiSocial",
+            "composite_social_score": 0.2,
+            "reason": "Strongly divisive framing.",
+        },
+    }
+
+    minimal = planner.generate_feedback_annotations(
+        narration_text="text",
+        preclassification_data=preclassification_data,
+        feedback_tier="minimal",
+        enhanced_rationale=False,
+    )
+    assert minimal["tier"] == "minimal"
+    assert "recommendations" not in minimal
+    assert isinstance(minimal["dimensions"], list)
+    assert all("reason" not in item for item in minimal["dimensions"])
+
+    expert = planner.generate_feedback_annotations(
+        narration_text="text",
+        preclassification_data=preclassification_data,
+        feedback_tier="expert",
+        enhanced_rationale=False,
+    )
+    assert expert["tier"] == "expert"
+    assert isinstance(expert.get("recommendations"), list)
+    assert isinstance(expert.get("confidence_flags"), list)
+    assert isinstance(expert.get("contradiction_flags"), list)
+    assert any("key_factors" in item for item in expert["dimensions"])
+
+
+def test_generate_feedback_annotations_enhanced_pass_uses_llm() -> None:
+    llm = StubLLM(
+        json.dumps(
+            {
+                "dimension_insights": [
+                    {
+                        "dimension": "truthfulness",
+                        "explanation": "Claims are presented with certainty despite sparse support.",
+                        "recommendation": "Verify key claims externally.",
+                    }
+                ],
+                "global_observations": ["High-risk rhetorical framing detected."],
+            }
+        )
+    )
+    planner = ScenePlanner(llm)
+    preclassification_data = {
+        "truthfulness_assessment": {
+            "label": "LikelyMisleading",
+            "confidence_score": 0.4,
+            "reason": "Low confidence high-risk pattern.",
+        }
+    }
+
+    feedback = planner.generate_feedback_annotations(
+        narration_text="A very assertive transcript snippet.",
+        preclassification_data=preclassification_data,
+        feedback_tier="expert",
+        enhanced_rationale=True,
+    )
+
+    assert feedback["tier"] == "expert"
+    assert "enhanced_pass" in feedback
+    enhanced = feedback["enhanced_pass"]
+    assert isinstance(enhanced, dict)
+    assert enhanced["focus_dimensions"] == ["truthfulness"]
+    assert enhanced["dimension_insights"][0]["dimension"] == "truthfulness"
+    assert "High-risk rhetorical framing" in enhanced["global_observations"][0]

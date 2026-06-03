@@ -495,6 +495,294 @@ class ScenePlanner:
 
         return normalized
 
+    def generate_feedback_annotations(
+        self,
+        *,
+        narration_text: str,
+        preclassification_data: dict[str, Any],
+        feedback_tier: str = "standard",
+        enhanced_rationale: bool = False,
+    ) -> dict[str, Any]:
+        tier = self._normalize_feedback_tier(feedback_tier)
+        dimensions = self._collect_feedback_dimensions(preclassification_data)
+
+        feedback: dict[str, Any] = {
+            "tier": tier,
+            "dimensions": dimensions,
+            "recommendations": self._build_feedback_recommendations(dimensions),
+            "confidence_flags": self._build_confidence_flags(dimensions),
+            "contradiction_flags": self._build_contradiction_flags(dimensions),
+        }
+
+        if tier == "minimal":
+            feedback["dimensions"] = [
+                {
+                    "dimension": entry["dimension"],
+                    "label": entry["label"],
+                }
+                for entry in dimensions
+            ]
+            feedback.pop("confidence_flags", None)
+            feedback.pop("contradiction_flags", None)
+            feedback.pop("recommendations", None)
+            return feedback
+
+        if tier == "standard":
+            return feedback
+
+        # Expert tier adds light-weight rationale factors.
+        for entry in feedback["dimensions"]:
+            label = str(entry.get("label", "")).strip()
+            dimension = str(entry.get("dimension", "")).strip()
+            if not dimension:
+                continue
+            entry["key_factors"] = self._derive_key_factors(
+                dimension=dimension, label=label
+            )
+
+        if enhanced_rationale:
+            deep_dive = self._generate_enhanced_rationale_pass(
+                narration_text=narration_text,
+                dimensions=dimensions,
+            )
+            if deep_dive:
+                feedback["enhanced_pass"] = deep_dive
+        return feedback
+
+    def _normalize_feedback_tier(self, feedback_tier: str) -> str:
+        normalized = self._normalize_fragment(feedback_tier).lower()
+        if normalized not in {"minimal", "standard", "expert"}:
+            return "standard"
+        return normalized
+
+    def _collect_feedback_dimensions(
+        self, preclassification_data: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        dimensions: list[dict[str, Any]] = []
+        mapping = (
+            ("truthfulness", "truthfulness_assessment"),
+            ("fact_check", "fact_check_assessment"),
+            ("aggression", "aggression_assessment"),
+            ("contemporary_alignment", "contemporary_alignment_assessment"),
+            ("propaganda_alignment", "propaganda_assessment"),
+        )
+        for dimension, key in mapping:
+            value = preclassification_data.get(key)
+            if not isinstance(value, dict):
+                continue
+            label = str(value.get("label", "")).strip()
+            if not label:
+                continue
+            reason = str(value.get("reason", "")).strip()
+            confidence = value.get("confidence_score")
+            dimensions.append(
+                {
+                    "dimension": dimension,
+                    "label": label,
+                    "confidence_score": (
+                        float(confidence)
+                        if isinstance(confidence, (int, float))
+                        else None
+                    ),
+                    "reason": reason,
+                }
+            )
+
+        social = preclassification_data.get("social_score_assessment")
+        if isinstance(social, dict):
+            label = str(social.get("composite_label", "")).strip()
+            score = social.get("composite_social_score")
+            reason = str(social.get("reason", "")).strip()
+            if label:
+                dimensions.append(
+                    {
+                        "dimension": "social_score",
+                        "label": label,
+                        "confidence_score": (
+                            float(score) if isinstance(score, (int, float)) else None
+                        ),
+                        "reason": reason,
+                    }
+                )
+        return dimensions
+
+    def _build_feedback_recommendations(
+        self, dimensions: list[dict[str, Any]]
+    ) -> list[str]:
+        labels = {
+            str(item.get("dimension", "")): str(item.get("label", ""))
+            for item in dimensions
+        }
+        recommendations: list[str] = []
+
+        if labels.get("truthfulness") == "LikelyMisleading" or labels.get(
+            "fact_check"
+        ) == "LikelyInaccurate":
+            recommendations.append(
+                "Consider independent fact-checking for key factual claims."
+            )
+        if labels.get("aggression") == "High":
+            recommendations.append(
+                "Review tone for de-escalation and moderation policy alignment."
+            )
+        if labels.get("propaganda_alignment") == "High":
+            recommendations.append(
+                "Review rhetorical framing for potential manipulative messaging."
+            )
+        if labels.get("social_score") == "AntiSocial":
+            recommendations.append(
+                "Consider revising language to improve constructive social framing."
+            )
+        return recommendations
+
+    def _build_confidence_flags(self, dimensions: list[dict[str, Any]]) -> list[str]:
+        flags: list[str] = []
+        for item in dimensions:
+            confidence = item.get("confidence_score")
+            if isinstance(confidence, float) and confidence < 0.55:
+                flags.append(
+                    f"Low confidence in {item.get('dimension')}: {confidence:.2f}."
+                )
+        return flags
+
+    def _build_contradiction_flags(self, dimensions: list[dict[str, Any]]) -> list[str]:
+        labels = {
+            str(item.get("dimension", "")): str(item.get("label", ""))
+            for item in dimensions
+        }
+        flags: list[str] = []
+        if labels.get("truthfulness") == "LikelyTruthful" and labels.get(
+            "fact_check"
+        ) == "LikelyInaccurate":
+            flags.append(
+                "Truthfulness and fact-check signals conflict; review supporting evidence."
+            )
+        if labels.get("social_score") == "ProSocial" and labels.get(
+            "aggression"
+        ) == "High":
+            flags.append(
+                "Social framing and aggression signals conflict; inspect context."
+            )
+        return flags
+
+    def _derive_key_factors(self, *, dimension: str, label: str) -> list[str]:
+        if dimension == "truthfulness" and label == "LikelyMisleading":
+            return [
+                "Detected strong certainty framing with limited supporting context.",
+                "Potential rhetorical overstatement in transcript tone.",
+            ]
+        if dimension == "fact_check" and label in {
+            "MixedOrNeedsEvidence",
+            "LikelyInaccurate",
+        }:
+            return [
+                "Claims appear to require external corroboration.",
+                "Transcript-only evidence is insufficient for strict verification.",
+            ]
+        if dimension == "aggression" and label == "High":
+            return [
+                "Language shows confrontational or hostile framing cues.",
+            ]
+        return [
+            "Assessment is derived from transcript wording and interaction patterns.",
+        ]
+
+    def _generate_enhanced_rationale_pass(
+        self,
+        *,
+        narration_text: str,
+        dimensions: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        focus_dimensions = self._select_enhanced_focus_dimensions(dimensions)
+        if not focus_dimensions:
+            return None
+
+        prompt = self._build_enhanced_rationale_prompt(
+            narration_text=narration_text,
+            focus_dimensions=focus_dimensions,
+        )
+        raw = self._llm.generate_text(prompt)
+        payload = self._extract_json(raw)
+        if not isinstance(payload, dict):
+            return None
+
+        insights = payload.get("dimension_insights")
+        if not isinstance(insights, list):
+            insights = []
+        normalized_insights: list[dict[str, Any]] = []
+        for item in insights:
+            if not isinstance(item, dict):
+                continue
+            dimension = self._normalize_fragment(str(item.get("dimension", "")))
+            explanation = self._normalize_fragment(str(item.get("explanation", "")))
+            recommendation = self._normalize_fragment(
+                str(item.get("recommendation", ""))
+            )
+            if not dimension or not explanation:
+                continue
+            normalized_insights.append(
+                {
+                    "dimension": dimension,
+                    "explanation": explanation,
+                    "recommendation": recommendation,
+                }
+            )
+
+        observations = payload.get("global_observations")
+        if not isinstance(observations, list):
+            observations = []
+        normalized_observations = [
+            self._normalize_fragment(str(item))
+            for item in observations
+            if self._normalize_fragment(str(item))
+        ]
+
+        if not normalized_insights and not normalized_observations:
+            return None
+        return {
+            "focus_dimensions": [item["dimension"] for item in focus_dimensions],
+            "dimension_insights": normalized_insights,
+            "global_observations": normalized_observations,
+        }
+
+    def _select_enhanced_focus_dimensions(
+        self, dimensions: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        selected: list[dict[str, Any]] = []
+        for item in dimensions:
+            label = str(item.get("label", ""))
+            confidence = item.get("confidence_score")
+            if isinstance(confidence, float) and confidence < 0.55:
+                selected.append(item)
+                continue
+            if label in {"LikelyMisleading", "LikelyInaccurate", "High", "AntiSocial"}:
+                selected.append(item)
+
+        # Keep prompt size bounded and deterministic.
+        return selected[:3]
+
+    def _build_enhanced_rationale_prompt(
+        self, *, narration_text: str, focus_dimensions: list[dict[str, Any]]
+    ) -> str:
+        focus_lines = "\n".join(
+            f"- {item['dimension']}: {item.get('label')} (confidence={item.get('confidence_score')})"
+            for item in focus_dimensions
+        )
+        snippet = narration_text.strip()
+        if len(snippet) > 1200:
+            snippet = snippet[:1200].rstrip() + "..."
+        return (
+            "You are generating expert-level rationale notes for transcript preclassification. "
+            "Return valid JSON only with this schema: "
+            "{\"dimension_insights\":[{\"dimension\":\"...\",\"explanation\":\"...\",\"recommendation\":\"...\"}],"
+            "\"global_observations\":[\"...\"]}. "
+            "Keep each explanation concise and transcript-grounded.\n\n"
+            "Focus dimensions:\n"
+            f"{focus_lines}\n\n"
+            "Transcript:\n"
+            f"{snippet}"
+        )
+
     def build_scenes(
         self,
         *,

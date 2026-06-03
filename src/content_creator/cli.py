@@ -350,6 +350,22 @@ def cli(
     show_default=True,
     help="Print the pre-classification analysis to the terminal after LLM analysis.",
 )
+@click.option(
+    "--feedback-tier",
+    default="standard",
+    show_default=True,
+    type=click.Choice(["minimal", "standard", "expert"], case_sensitive=False),
+    help="Verbosity level for pre-classification feedback artifacts and summaries.",
+)
+@click.option(
+    "--enhanced-rationale/--no-enhanced-rationale",
+    default=False,
+    show_default=True,
+    help=(
+        "Run an optional extra LLM rationale pass for expert feedback. "
+        "May increase latency and inference cost."
+    ),
+)
 @click.pass_context
 def from_text(
     ctx: click.Context,
@@ -365,6 +381,8 @@ def from_text(
     images_per_scene: int | None,
     work_dir: str | None,
     view_preclassification: bool,
+    feedback_tier: str,
+    enhanced_rationale: bool,
 ) -> None:
     """Generate narration with TTS and create a matching AI video."""
 
@@ -408,6 +426,8 @@ def from_text(
             image_workers=resolved_image_workers,
             images_per_scene=resolved_images_per_scene,
             view_preclassification=view_preclassification,
+            feedback_tier=feedback_tier.lower(),
+            enhanced_rationale=enhanced_rationale,
         )
         click.echo(f"✅ Video written to {result}")
 
@@ -602,6 +622,22 @@ def from_text(
     show_default=True,
     help="Print the pre-classification analysis to the terminal after LLM analysis.",
 )
+@click.option(
+    "--feedback-tier",
+    default="standard",
+    show_default=True,
+    type=click.Choice(["minimal", "standard", "expert"], case_sensitive=False),
+    help="Verbosity level for pre-classification feedback artifacts and summaries.",
+)
+@click.option(
+    "--enhanced-rationale/--no-enhanced-rationale",
+    default=False,
+    show_default=True,
+    help=(
+        "Run an optional extra LLM rationale pass for expert feedback. "
+        "May increase latency and inference cost."
+    ),
+)
 @click.pass_context
 def from_audio(
     ctx: click.Context,
@@ -633,6 +669,8 @@ def from_audio(
     profanity_duck_db: float,
     work_dir: str | None,
     view_preclassification: bool,
+    feedback_tier: str,
+    enhanced_rationale: bool,
 ) -> None:
     """Transcribe supplied audio and generate a matching AI video track."""
 
@@ -704,6 +742,8 @@ def from_audio(
             profanity_pad_seconds=(profanity_pad_ms / 1000.0),
             profanity_duck_db=profanity_duck_db,
             view_preclassification=view_preclassification,
+            feedback_tier=feedback_tier.lower(),
+            enhanced_rationale=enhanced_rationale,
         )
         click.echo(f"✅ Video written to {result}")
 
@@ -1253,6 +1293,22 @@ def lexicon_doctor(
         "Use off to disable pre-classification narration."
     ),
 )
+@click.option(
+    "--feedback-tier",
+    default="standard",
+    show_default=True,
+    type=click.Choice(["minimal", "standard", "expert"], case_sensitive=False),
+    help="Verbosity level for spoken pre-classification feedback in debug output.",
+)
+@click.option(
+    "--enhanced-rationale/--no-enhanced-rationale",
+    default=False,
+    show_default=True,
+    help=(
+        "Run an optional extra LLM rationale pass for expert pre-classification "
+        "feedback. May increase latency and inference cost."
+    ),
+)
 @click.option("--work-dir", default=None, help="Directory for intermediate assets.")
 @click.pass_context
 def profanity_debug(
@@ -1266,6 +1322,8 @@ def profanity_debug(
     context_seconds: float,
     gap_seconds: float,
     preclassification_position: str,
+    feedback_tier: str,
+    enhanced_rationale: bool,
     work_dir: str | None,
 ) -> None:
     """Generate a debug audio file illustrating each detected profanity event.
@@ -1331,6 +1389,8 @@ def profanity_debug(
             context_seconds=context_seconds,
             gap_seconds=gap_seconds,
             preclassification_position=preclassification_position.lower(),
+            feedback_tier=feedback_tier.lower(),
+            enhanced_rationale=enhanced_rationale,
         )
         if event_count == 0:
             click.echo("ℹ️ No profanity events found — no debug audio generated.")

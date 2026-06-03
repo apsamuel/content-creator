@@ -23,6 +23,7 @@ from content_creator.planner import (
     ScenePlanner,
     ScenePlan,
     VideoPromptPlan,
+    VideoPromptPreclassification,
 )
 from content_creator.profanity_sfx import (
     build_profanity_sfx_plan,
@@ -92,6 +93,8 @@ class VideoGenerationPipeline:
         image_workers: int = 1,
         images_per_scene: int = 1,
         view_preclassification: bool = False,
+        feedback_tier: str = "standard",
+        enhanced_rationale: bool = False,
     ) -> Path:
         self._ensure_video_dependencies()
         run_dir = self._prepare_run_dir(output_path)
@@ -138,6 +141,8 @@ class VideoGenerationPipeline:
             image_workers=image_workers,
             images_per_scene=images_per_scene,
             view_preclassification=view_preclassification,
+            feedback_tier=feedback_tier,
+            enhanced_rationale=enhanced_rationale,
         )
 
     def generate_from_audio(
@@ -170,6 +175,8 @@ class VideoGenerationPipeline:
         image_workers: int = 1,
         images_per_scene: int = 1,
         view_preclassification: bool = False,
+        feedback_tier: str = "standard",
+        enhanced_rationale: bool = False,
     ) -> Path:
         self._ensure_video_dependencies()
         run_dir = self._prepare_run_dir(output_path)
@@ -277,6 +284,8 @@ class VideoGenerationPipeline:
             image_workers=image_workers,
             images_per_scene=images_per_scene,
             view_preclassification=view_preclassification,
+            feedback_tier=feedback_tier,
+            enhanced_rationale=enhanced_rationale,
         )
 
     def rebuild_video_from_run(
@@ -591,6 +600,8 @@ class VideoGenerationPipeline:
         context_seconds: float = 0.5,
         gap_seconds: float = 0.3,
         preclassification_position: str = "prepend",
+        feedback_tier: str = "standard",
+        enhanced_rationale: bool = False,
     ) -> int:
         """Build a debug audio file illustrating each profanity detection event.
 
@@ -670,6 +681,13 @@ class VideoGenerationPipeline:
                 preclassification_data = self._serialize_preclassification(
                     preclass_plan.preclassification
                 )
+                if preclassification_data is not None:
+                    preclassification_data = self._attach_feedback_annotations(
+                        narration_text=transcript_text,
+                        preclassification_data=preclassification_data,
+                        feedback_tier=feedback_tier,
+                        enhanced_rationale=enhanced_rationale,
+                    )
             except Exception as exc:
                 self._status(
                     "⚠️ Unable to generate pre-classification for debug narration: "
@@ -699,6 +717,7 @@ class VideoGenerationPipeline:
                     if normalized_preclass_position == "prepend"
                     else None
                 ),
+                feedback_tier=feedback_tier,
             )
             if input_summary_text:
                 self._status("🎤 Prepending synthesized input summary")
@@ -781,6 +800,7 @@ class VideoGenerationPipeline:
                     if normalized_preclass_position == "append"
                     else None
                 ),
+                feedback_tier=feedback_tier,
             )
             if summary_text:
                 if normalized_preclass_position == "append" and preclassification_data:
@@ -839,6 +859,7 @@ class VideoGenerationPipeline:
         gap_seconds: float,
         using_manifest_events: bool,
         preclassification_data: dict[str, object] | None = None,
+        feedback_tier: str = "standard",
     ) -> str:
         summary_parts = [
             "Debug input summary.",
@@ -1050,6 +1071,12 @@ class VideoGenerationPipeline:
                             f"{float(sentence_complexity_score):.4f}."
                         )
 
+            self._append_feedback_summary_lines(
+                summary_parts=summary_parts,
+                preclassification_data=preclassification_data,
+                feedback_tier=feedback_tier,
+            )
+
         summary_parts.append("Begin event diagnostics.")
         return " ".join(summary_parts)
 
@@ -1059,6 +1086,7 @@ class VideoGenerationPipeline:
         events: list[dict[str, object]],
         transcript_text: str | None,
         preclassification_data: dict[str, object] | None,
+        feedback_tier: str = "standard",
     ) -> str:
         unique_words = {
             str(event.get("word", "")).strip().lower()
@@ -1250,6 +1278,12 @@ class VideoGenerationPipeline:
                             f"{float(sentence_complexity_score):.4f}."
                         )
 
+            self._append_feedback_summary_lines(
+                summary_parts=summary_parts,
+                preclassification_data=preclassification_data,
+                feedback_tier=feedback_tier,
+            )
+
         summary_parts.append("End diagnostic summary.")
         return " ".join(summary_parts)
 
@@ -1338,6 +1372,8 @@ class VideoGenerationPipeline:
         image_workers: int = 1,
         images_per_scene: int = 1,
         view_preclassification: bool = False,
+        feedback_tier: str = "standard",
+        enhanced_rationale: bool = False,
     ) -> Path:
         if manifest is None:
             manifest = {
@@ -1360,9 +1396,17 @@ class VideoGenerationPipeline:
         )
         resolved_video_prompt = video_prompt_plan.video_prompt
         manifest["video_prompt"] = resolved_video_prompt
-        manifest["video_prompt_preclassification"] = self._serialize_preclassification(
+        serialized_preclassification = self._serialize_preclassification(
             video_prompt_plan.preclassification
         )
+        if serialized_preclassification is not None:
+            serialized_preclassification = self._attach_feedback_annotations(
+                narration_text=narration_text,
+                preclassification_data=serialized_preclassification,
+                feedback_tier=feedback_tier,
+                enhanced_rationale=enhanced_rationale,
+            )
+        manifest["video_prompt_preclassification"] = serialized_preclassification
         analysis_summary_path = self._write_analysis_summary_artifact(
             run_dir=run_dir,
             narration_text=narration_text,
@@ -1771,7 +1815,7 @@ class VideoGenerationPipeline:
         )
 
     def _serialize_preclassification(
-        self, preclassification: object
+        self, preclassification: VideoPromptPreclassification | None
     ) -> dict[str, object] | None:
         if preclassification is None:
             return None
@@ -2563,6 +2607,84 @@ class VideoGenerationPipeline:
         summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
         return summary_path
 
+    def _attach_feedback_annotations(
+        self,
+        *,
+        narration_text: str,
+        preclassification_data: dict[str, object],
+        feedback_tier: str,
+        enhanced_rationale: bool,
+    ) -> dict[str, object]:
+        payload = dict(preclassification_data)
+        if enhanced_rationale:
+            self._status(
+                "🧠 Running optional enhanced pre-classification rationale pass"
+            )
+        if hasattr(self._planner, "generate_feedback_annotations"):
+            feedback = self._planner.generate_feedback_annotations(
+                narration_text=narration_text,
+                preclassification_data=payload,
+                feedback_tier=feedback_tier,
+                enhanced_rationale=enhanced_rationale,
+            )
+            if isinstance(feedback, dict):
+                payload["feedback"] = feedback
+        return payload
+
+    def _append_feedback_summary_lines(
+        self,
+        *,
+        summary_parts: list[str],
+        preclassification_data: dict[str, object],
+        feedback_tier: str,
+    ) -> None:
+        feedback = preclassification_data.get("feedback")
+        if not isinstance(feedback, dict):
+            return
+
+        tier = str(feedback.get("tier", feedback_tier)).strip().lower() or "standard"
+        if tier == "minimal":
+            return
+
+        confidence_flags = feedback.get("confidence_flags")
+        if isinstance(confidence_flags, list) and confidence_flags:
+            summary_parts.append(
+                "Confidence flags: "
+                + "; ".join(str(item).strip() for item in confidence_flags if str(item).strip())
+                + "."
+            )
+
+        if tier != "expert":
+            return
+
+        contradiction_flags = feedback.get("contradiction_flags")
+        if isinstance(contradiction_flags, list) and contradiction_flags:
+            summary_parts.append(
+                "Contradiction flags: "
+                + "; ".join(
+                    str(item).strip() for item in contradiction_flags if str(item).strip()
+                )
+                + "."
+            )
+
+        recommendations = feedback.get("recommendations")
+        if isinstance(recommendations, list) and recommendations:
+            summary_parts.append(
+                "Recommendations: "
+                + "; ".join(str(item).strip() for item in recommendations if str(item).strip())
+                + "."
+            )
+
+        enhanced_pass = feedback.get("enhanced_pass")
+        if isinstance(enhanced_pass, dict):
+            observations = enhanced_pass.get("global_observations")
+            if isinstance(observations, list) and observations:
+                summary_parts.append(
+                    "Enhanced observations: "
+                    + "; ".join(str(item).strip() for item in observations if str(item).strip())
+                    + "."
+                )
+
     def _format_preclassification_rollup(self, preclassification: object) -> str:
         if not isinstance(preclassification, dict):
             return ""
@@ -2606,6 +2728,32 @@ class VideoGenerationPipeline:
                 if isinstance(weighted, (int, float)):
                     line += f" ({float(weighted):.2f})"
                 lines.append(line)
+
+        feedback = preclassification.get("feedback")
+        if isinstance(feedback, dict):
+            tier = str(feedback.get("tier", "")).strip()
+            if tier:
+                lines.append(f"- Feedback tier: {tier}")
+            confidence_flags = feedback.get("confidence_flags")
+            if isinstance(confidence_flags, list) and confidence_flags:
+                lines.append(
+                    "- Confidence flags: "
+                    + "; ".join(
+                        str(item).strip()
+                        for item in confidence_flags
+                        if str(item).strip()
+                    )
+                )
+            recommendations = feedback.get("recommendations")
+            if isinstance(recommendations, list) and recommendations:
+                lines.append(
+                    "- Recommendations: "
+                    + "; ".join(
+                        str(item).strip()
+                        for item in recommendations
+                        if str(item).strip()
+                    )
+                )
 
         return "\n".join(lines)
 

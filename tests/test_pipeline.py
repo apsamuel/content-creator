@@ -969,6 +969,59 @@ def test_generate_from_text_can_generate_video_prompt(
     assert summary_payload["dimensions"]["propaganda_alignment"]["label"] == "Low"
 
 
+def test_generate_from_text_persists_feedback_annotations_when_available(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import content_creator.pipeline as pipeline_module
+
+    class FeedbackPlanner(FakePlanner):
+        def generate_feedback_annotations(
+            self,
+            *,
+            narration_text: str,
+            preclassification_data: dict[str, object],
+            feedback_tier: str = "standard",
+            enhanced_rationale: bool = False,
+        ) -> dict[str, object]:
+            return {
+                "tier": feedback_tier,
+                "dimensions": [{"dimension": "truthfulness", "label": "MixedOrUnverifiable"}],
+                "recommendations": ["Consider fact-checking for high-impact claims."],
+                "confidence_flags": ["Low confidence in fact_check: 0.41."],
+                "contradiction_flags": [],
+                "enhanced_pass": (
+                    {"global_observations": ["Optional enhanced pass executed."]}
+                    if enhanced_rationale
+                    else None
+                ),
+            }
+
+    monkeypatch.setattr(pipeline_module, "HuggingFaceGateway", FakeGateway)
+    monkeypatch.setattr(pipeline_module, "ScenePlanner", FeedbackPlanner)
+    monkeypatch.setattr(pipeline_module, "MediaAssembler", FakeMedia)
+    monkeypatch.setattr(pipeline_module.shutil, "which", lambda _name: "/usr/bin/fake")
+
+    pipeline = VideoGenerationPipeline(_config(tmp_path))
+    output_path = tmp_path / "out" / "feedback.mp4"
+
+    pipeline.generate_from_text(
+        narration_text="Narration",
+        video_prompt="Video direction",
+        output_path=output_path,
+        feedback_tier="expert",
+        enhanced_rationale=True,
+    )
+
+    manifest_path = _config(tmp_path).work_dir / output_path.stem / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    preclassification = manifest["video_prompt_preclassification"]
+    assert isinstance(preclassification, dict)
+    feedback = preclassification.get("feedback")
+    assert isinstance(feedback, dict)
+    assert feedback.get("tier") == "expert"
+    assert "recommendations" in feedback
+
+
 def test_generate_from_text_includes_cinematic_intro_when_enabled(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
